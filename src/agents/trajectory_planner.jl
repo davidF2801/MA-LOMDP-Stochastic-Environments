@@ -1,0 +1,125 @@
+using POMDPs
+using POMDPTools
+using POMDPPolicies
+using LinearAlgebra
+
+"""
+TrajectoryPlanner - Manages deterministic periodic trajectories for agents
+"""
+module TrajectoryPlanner
+
+using POMDPs
+using POMDPTools
+using POMDPPolicies
+using LinearAlgebra
+
+export Agent, get_position_at_time, calculate_trajectory_period
+
+"""
+Agent - Represents an agent with a deterministic periodic trajectory
+"""
+struct Agent
+    id::Int
+    trajectory::Trajectory
+    sensor::RangeLimitedSensor
+    current_time::Int
+end
+
+"""
+get_position_at_time(trajectory::CircularTrajectory, time::Int)
+Gets agent position at a specific time for circular trajectory
+"""
+function get_position_at_time(trajectory::CircularTrajectory, time::Int)
+    # TODO: Implement circular trajectory position calculation
+    # - Calculate angle based on time and period
+    # - Convert to x,y coordinates
+    
+    angle = 2π * (time % trajectory.period) / trajectory.period
+    x = trajectory.center_x + round(Int, trajectory.radius * cos(angle))
+    y = trajectory.center_y + round(Int, trajectory.radius * sin(angle))
+    
+    return (x, y)
+end
+
+"""
+get_position_at_time(trajectory::LinearTrajectory, time::Int)
+Gets agent position at a specific time for linear trajectory
+"""
+function get_position_at_time(trajectory::LinearTrajectory, time::Int)
+    # TODO: Implement linear trajectory position calculation
+    # - Interpolate between start and end points
+    # - Handle periodic repetition
+    
+    t = (time % trajectory.period) / trajectory.period
+    x = round(Int, trajectory.start_x + t * (trajectory.end_x - trajectory.start_x))
+    y = round(Int, trajectory.start_y + t * (trajectory.end_y - trajectory.start_y))
+    
+    return (x, y)
+end
+
+"""
+calculate_trajectory_period(trajectory::Trajectory)
+Calculates the period of a trajectory
+"""
+function calculate_trajectory_period(trajectory::CircularTrajectory)
+    return trajectory.period
+end
+
+function calculate_trajectory_period(trajectory::LinearTrajectory)
+    return trajectory.period
+end
+
+"""
+update_agent_position!(agent::Agent, time::Int)
+Updates agent position based on current time
+"""
+function update_agent_position!(agent::Agent, time::Int)
+    # TODO: Implement position update
+    agent.current_time = time
+end
+
+"""
+get_trajectory_waypoints(trajectory::Trajectory, num_points::Int)
+Gets waypoints along the trajectory for visualization
+"""
+function get_trajectory_waypoints(trajectory::CircularTrajectory, num_points::Int)
+    # TODO: Implement waypoint calculation for circular trajectory
+    waypoints = Tuple{Int, Int}[]
+    
+    for i in 0:num_points-1
+        time = round(Int, i * trajectory.period / num_points)
+        push!(waypoints, get_position_at_time(trajectory, time))
+    end
+    
+    return waypoints
+end
+
+function get_trajectory_waypoints(trajectory::LinearTrajectory, num_points::Int)
+    # TODO: Implement waypoint calculation for linear trajectory
+    waypoints = Tuple{Int, Int}[]
+    
+    for i in 0:num_points-1
+        time = round(Int, i * trajectory.period / num_points)
+        push!(waypoints, get_position_at_time(trajectory, time))
+    end
+    
+    return waypoints
+end
+
+"""
+create_circular_trajectory(center_x::Int, center_y::Int, radius::Float64, period::Int)
+Creates a circular trajectory
+"""
+function create_circular_trajectory(center_x::Int, center_y::Int, radius::Float64, period::Int)
+    return CircularTrajectory(center_x, center_y, radius, period)
+end
+
+"""
+create_linear_trajectory(start_x::Int, start_y::Int, end_x::Int, end_y::Int, period::Int)
+Creates a linear trajectory
+"""
+function create_linear_trajectory(start_x::Int, start_y::Int, end_x::Int, end_y::Int, period::Int)
+    return LinearTrajectory(start_x, start_y, end_x, end_y, period)
+end
+
+end # module 

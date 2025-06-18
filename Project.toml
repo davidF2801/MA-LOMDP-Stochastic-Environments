@@ -1,0 +1,22 @@
+name = "MA-LOMDP-Stochastic-Environments"
+uuid = "12345678-1234-1234-1234-123456789012"
+authors = ["Your Name <your.email@example.com>"]
+version = "0.1.0"
+
+[deps]
+POMDPs = "a93abf59-7444-517b-a68a-c42f96afdd7d"
+POMDPTools = "7588e00f-9cae-40de-9868-6e1efcbb224e"
+POMDPPolicies = "182e52fb-cfd8-40b8-a473-f93ce0c89b49"
+POMDPSimulators = "e0d0a828-2c03-4ebc-b28c-87df2d23aae0"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[compat]
+julia = "1.6"
+POMDPs = "0.9"
+POMDPTools = "0.1"
+POMDPPolicies = "0.4"
+POMDPSimulators = "0.3"
+Distributions = "0.25" 
