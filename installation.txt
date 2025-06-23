@@ -1,0 +1,28 @@
+# ===============================
+# Setup Guide for MA-LOMDP-Stochastic-Environments
+# ===============================
+
+# 1. Open Julia REPL
+# 2. Paste the following block:
+
+using Pkg
+
+# Activate project directory
+cd("C:/Users/davidf/Desktop/MA-LOMDP-Stochastic-Environments")
+Pkg.activate(".")
+
+# OPTIONAL: Clean existing manifest (if errors occur)
+# rm("Manifest.toml")
+
+# Add missing registry (in case it's not installed)
+try
+    Pkg.Registry.add("General")
+catch e
+    @warn "General registry already added"
+end
+
+# Manually install POMDPTools since registry may fail
+Pkg.add(url="https://github.com/JuliaPOMDP/POMDPTools.jl")
+
+# Now instantiate all dependencies
+Pkg.instantiate()
