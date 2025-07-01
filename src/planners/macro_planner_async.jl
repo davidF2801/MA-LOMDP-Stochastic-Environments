@@ -1,4 +1,4 @@
-module MacroPlanner
+module MacroPlannerAsync
 
 using POMDPs
 using POMDPTools
@@ -9,12 +9,17 @@ import ..Agents.BeliefManagement: sample_from_belief
 import ..EventState, ..NO_EVENT, ..EVENT_PRESENT
 import ..EventState2, ..NO_EVENT_2, ..EVENT_PRESENT_2
 import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..RangeLimitedSensor
-import ..get_position_at_time
+# Import trajectory functions
+import ..Agents.TrajectoryPlanner.get_position_at_time
+# Import DBN functions for transition modeling
+import ..Environment.EventDynamicsModule.DBNTransitionModel2, ..Environment.EventDynamicsModule.predict_next_belief_dbn
+# Import belief management functions
+import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief
 
 export best_script
 
 """
-best_script(env, belief::GlobalBeliefState, agent::Agent, C::Int, other_scripts)::Vector{SensingAction}
+best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts)::Vector{SensingAction}
   – Enumerate every |A|^C open-loop action sequence for `agent`.
   – For each sequence:
         • Roll out C steps:  (simulate using env.transition & env.observation)
@@ -24,7 +29,7 @@ best_script(env, belief::GlobalBeliefState, agent::Agent, C::Int, other_scripts)
         • For other agents use `other_scripts[k]` (deterministic vector passed in)
   – Return argmax sequence (ties → first).
 """
-function best_script(env, belief, agent, C::Int, other_scripts; rng::AbstractRNG=Random.GLOBAL_RNG)
+function best_script(env, belief::Belief, agent, C::Int, other_scripts; rng::AbstractRNG=Random.GLOBAL_RNG)
     # Get available actions for the agent
     available_actions = get_available_actions(agent, env)
     
@@ -82,55 +87,31 @@ function generate_action_sequences(actions::Vector{SensingAction}, C::Int)
 end
 
 """
-Evaluate a single action sequence using Monte Carlo rollouts
+Evaluate a single action sequence using deterministic open-loop macro-script evaluation
 """
 function evaluate_action_sequence(env, belief, agent, sequence::Vector{SensingAction}, other_scripts, C::Int, rng::AbstractRNG)
-    num_rollouts = 50  # Number of Monte Carlo samples
-    total_value = 0.0
+    γ = env.discount  # Use environment discount factor
+    value = 0.0
+    B = deepcopy(belief)  # Copy belief for deterministic evolution
     
-    for rollout in 1:num_rollouts
-        # Copy belief for this rollout
-        current_belief = copy(belief)
-        current_state = sample_from_belief(current_belief, rng)
+    for k in 1:min(length(sequence), C)
+        # Get current action
+        action = sequence[k]
         
-        rollout_value = 0.0
-        discount_factor = 1.0
+        # Get other agents' actions for this step (deterministic)
+        other_actions = get_other_actions(other_scripts, k)
         
-        for k in 1:min(length(sequence), C)
-            # Get current action
-            action = sequence[k]
-            
-            # Get other agents' actions for this step
-            other_actions = get_other_actions(other_scripts, k)
-            
-            # Simulate environment transition
-            joint_action = [action; other_actions]
-            next_state = simulate_transition(env, current_state, joint_action, rng)
-            
-            # Calculate reward (information gain - cost)
-            reward = calculate_reward(env, current_state, action, current_belief)
-            
-            # Update belief with predicted observations (expectation over observation distribution)
-            observation = predict_observation(env, current_state, action, rng)
-            update_belief_with_observation!(current_belief, action, observation, env)
-            
-            # Accumulate discounted reward
-            rollout_value += discount_factor * reward
-            
-            # Update state and discount factor
-            current_state = next_state
-            discount_factor *= 0.95  # gamma discount
-            
-            # Early termination if no more actions
-            if k >= length(sequence)
-                break
-            end
-        end
+        # Calculate expected information gain considering other agents' actions and belief evolution
+        gain = calculate_expected_information_gain_with_other_agents(B, action, other_actions, env)
         
-        total_value += rollout_value
+        # Accumulate discounted reward
+        value += (γ)^(k-1) * gain
+        
+        # Simulate the step: belief evolution + other agents' observations
+        B = simulate_step_with_other_agents(B, other_actions, env)
     end
     
-    return total_value / num_rollouts
+    return value
 end
 
 """
@@ -141,7 +122,7 @@ function get_available_actions(agent, env)
     current_pos = get_agent_position(agent, env)
     
     # Get cells within sensor range (Field of View)
-    fov_cells = get_field_of_view(agent, current_pos, env)
+    fov_cells = get_field_of_regard(agent, current_pos, env)
     
     # Generate sensing actions for different subsets of FOV cells
     actions = SensingAction[]
@@ -189,53 +170,133 @@ function get_other_actions(other_scripts, step::Int)
     return actions
 end
 
-"""
-Simulate environment transition
-"""
-function simulate_transition(env, current_state, joint_action, rng::AbstractRNG)
-    # For now, return a copy of current state
-    # In a full implementation, this would use the environment's transition model
-    return copy(current_state)
-end
+
+
+
 
 """
-Calculate reward for an action (information gain - cost)
+Calculate expected information gain considering other agents' actions and observations
 """
-function calculate_reward(env, state, action::SensingAction, belief)
+function calculate_expected_information_gain_with_other_agents(belief, action::SensingAction, other_actions::Vector{SensingAction}, env)
     if isempty(action.target_cells)
         return 0.0  # Wait action
     end
     
-    # Calculate information gain
+    # Calculate expected information gain for each sensed cell
     information_gain = 0.0
+    
     for cell in action.target_cells
-        # Get current uncertainty at this cell
-        uncertainty = get_cell_uncertainty(belief, cell)
-        information_gain += uncertainty
+        x, y = cell
+        if 1 <= x <= env.width && 1 <= y <= env.height
+            # Calculate expected information gain for this cell considering other agents
+            cell_information_gain = calculate_cell_information_gain_with_other_agents(
+                belief, cell, other_actions, env
+            )
+            information_gain += cell_information_gain
+        end
     end
     
-    # Subtract observation cost
-    observation_cost = 0.1  # Cost per sensing action
+    # Subtract observation cost: c_obs * number of non-wait actions
+    observation_cost = 0.1 * length(action.target_cells)  # Cost per cell sensed
     
     return information_gain - observation_cost
 end
 
 """
-Predict observation for an action (expectation over observation distribution)
+Calculate information gain for a cell considering other agents' actions
 """
-function predict_observation(env, state, action::SensingAction, rng::AbstractRNG)
-    # For now, return a simple observation
-    # In a full implementation, this would sample from P(O|a, s)
-    return GridObservation(action.agent_id, action.target_cells, EventState[], [])
+function calculate_cell_information_gain_with_other_agents(belief, cell::Tuple{Int, Int}, other_actions::Vector{SensingAction}, env)
+    x, y = cell
+    
+    # Get current belief for this cell
+    current_belief_prob = belief.event_probabilities[y, x]
+    
+    # Check if other agents are observing this cell in the current step
+    num_agents_observing = 1  # Count ourselves
+    for other_action in other_actions
+        if other_action !== nothing && cell in other_action.target_cells
+            num_agents_observing += 1
+        end
+    end
+    
+    # Calculate information gain for this cell
+    cell_information_gain = calculate_cell_information_gain(current_belief_prob)
+    
+    # If multiple agents are observing, share the information gain
+    if num_agents_observing > 1
+        cell_information_gain /= num_agents_observing
+    end
+    
+    return cell_information_gain
 end
 
 """
-Update belief with observation
+Calculate information gain for a single cell: G(b_k) = H(b_k) * P(event)
 """
-function update_belief_with_observation!(belief, action::SensingAction, observation::GridObservation, env)
-    # For now, do nothing
-    # In a full implementation, this would update the belief using Bayes rule
+function calculate_cell_information_gain(probability::Float64)
+    # Calculate entropy: H(b_k) = -b_k * log(b_k) - (1-b_k) * log(1-b_k)
+    entropy = calculate_entropy(probability)
+    
+    # Weight by event probability: G(b_k) = H(b_k) * P(event)
+    return entropy * probability
 end
+
+"""
+Simulate one step considering other agents' actions and observations
+"""
+function simulate_step_with_other_agents(belief, other_actions::Vector{SensingAction}, env)
+    # First, apply DBN belief evolution
+    evolved_belief = predict_belief_evolution_dbn(belief, env.event_dynamics, 1)
+    
+    # Then, simulate other agents' observations and update belief
+    updated_belief = copy(evolved_belief)
+    
+    for other_action in other_actions
+        if other_action !== nothing && !isempty(other_action.target_cells)
+            # Simulate observations for this agent's action
+            for cell in other_action.target_cells
+                x, y = cell
+                if 1 <= x <= env.width && 1 <= y <= env.height
+                    # Get current belief for this cell
+                    current_prob = updated_belief.event_probabilities[y, x]
+                    
+                    # Simulate observation (perfect observation model)
+                    # In a more sophisticated model, this would be probabilistic
+                    # For now, we'll assume the observation reduces uncertainty
+                    # This is a simplified approach - in reality, we'd need to consider
+                    # the actual observation model and update accordingly
+                    
+                    # Simple update: if probability is high, assume event was observed
+                    # if probability is low, assume no event was observed
+                    if current_prob > 0.5
+                        # Likely event present, observation would confirm it
+                        updated_belief.event_probabilities[y, x] = 0.9
+                    else
+                        # Likely no event, observation would confirm it
+                        updated_belief.event_probabilities[y, x] = 0.1
+                    end
+                end
+            end
+        end
+    end
+    
+    return updated_belief
+end
+
+"""
+Calculate entropy for a binary belief state (event vs no event)
+H(b_k) = -b_k * log(b_k) - (1-b_k) * log(1-b_k)
+"""
+function calculate_entropy(probability::Float64)
+    if probability <= 0.0 || probability >= 1.0
+        return 0.0  # No uncertainty if probability is 0 or 1
+    end
+    return -(probability * log(probability) + (1 - probability) * log(1 - probability))
+end
+
+
+
+
 
 """
 Get agent's current position
@@ -278,7 +339,7 @@ end
 """
 Get field of view for an agent at a position
 """
-function get_field_of_view(agent, position, env)
+function get_field_of_regard(agent, position, env)
     # For now, return a simple FOV
     # In a full implementation, this would use the agent's sensor model
     x, y = position
@@ -296,14 +357,7 @@ function get_field_of_view(agent, position, env)
     return fov_cells
 end
 
-"""
-Get cell uncertainty from belief
-"""
-function get_cell_uncertainty(belief, cell)
-    # For now, return a default uncertainty
-    # In a full implementation, this would get the actual uncertainty from the belief
-    return 0.5
-end
+
 
 """
 Generate combinations of elements

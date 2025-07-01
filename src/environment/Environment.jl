@@ -5,7 +5,6 @@ using POMDPTools
 using Distributions
 using Random
 using ..Types
-using ..Agents
 import ..Types.EventState, ..Types.SensingAction, ..Types.GridObservation, ..Types.RangeLimitedSensor, ..Types.Trajectory, ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.EventDynamics, ..Types.TwoStateEventDynamics
 
 # Export submodules

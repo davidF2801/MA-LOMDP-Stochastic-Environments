@@ -39,17 +39,9 @@ function predict_next_belief_dbn(b_k::Float64, b_neighbors::Vector{Float64}, mod
     return b_k * p1 + (1.0 - b_k) * p0
 end
 
-export Belief, update_belief_state, initialize_belief, calculate_uncertainty, predict_belief_evolution_dbn
+export update_belief_state, initialize_belief, calculate_uncertainty, predict_belief_evolution_dbn
 
-"""
-Belief - Represents the local belief state of an agent
-"""
-struct Belief
-    event_probabilities::Matrix{Float64}  # Probability of events at each cell
-    uncertainty_map::Matrix{Float64}      # Uncertainty at each cell
-    last_update::Int                      # Last update time step
-    history::Vector{Tuple{SensingAction, GridObservation}}
-end
+# Belief type is now defined in Types module
 
 """
 update_belief_state(belief::Belief, action::SensingAction, observation::GridObservation, event_dynamics::EventDynamics)

@@ -40,7 +40,7 @@ println("✅ Random seed set")
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 15                  # Total simulation steps
+const NUM_STEPS = 100                  # Total simulation steps
 const COMPARISON_STEPS = 3000         # Steps for planning mode comparison
 const CONTACT_FREQUENCY_STEPS = 25    # Steps for contact frequency analysis
 const PLANNING_MODE = :script         # :script or :policy
@@ -48,7 +48,7 @@ const PLANNING_MODE = :script         # :script or :policy
 # 🌍 ENVIRONMENT PARAMETERS
 const GRID_WIDTH = 5                  # Grid width (columns)
 const GRID_HEIGHT = 5                 # Grid height (rows)
-const INITIAL_EVENTS = 0             # Number of initial events
+const INITIAL_EVENTS = 2             # Number of initial events
 const MAX_SENSING_TARGETS = 1         # Maximum cells an agent can sense per step
 const SENSOR_RANGE = 1.5              # Sensor range for agents
 const DISCOUNT_FACTOR = 0.95          # POMDP discount factor
@@ -128,13 +128,13 @@ using .MyProject: CircularTrajectory, LinearTrajectory, RangeLimitedSensor
 using .MyProject: EventState2, NO_EVENT_2, EVENT_PRESENT_2
 
 # Import functions
-using .MyProject.Agents.TrajectoryPlanner: get_position_at_time
+using .MyProject.Agents.TrajectoryPlanner: get_position_at_time, execute_plan
 
 # Import specific modules
 using .Environment
 using .Environment.EventDynamicsModule
 using .Planners.GroundStation
-using .Planners.MacroPlanner
+using .Planners.MacroPlannerAsync
 using .Planners.PolicyTreePlanner
 
 println("✅ All modules imported successfully")
@@ -566,8 +566,9 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
         step_reward = 0.0
         
         for agent in agents
-            # Execute agent's current plan
-            action = GroundStation.execute_plan(agent, gs_state, agent.observation_history)
+            # Get plan from ground station and execute it
+            plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
+            action = execute_plan(agent, plan, plan_type, agent.observation_history)
             push!(joint_actions, action)
             
             # Calculate reward for this agent
@@ -578,11 +579,30 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
                 step_reward += agent_reward
             end
             
-            # Simulate observation (simplified)
-            observation = GridObservation(agent.id, action.target_cells, EventState[], [])
+            # Simulate observation based on current environment state
+            event_states = EventState[]
+            for cell in action.target_cells
+                x, y = cell
+                if 1 <= x <= env.width && 1 <= y <= env.height
+                    # Get the actual event state from the environment
+                    event_state = current_environment[y, x]
+                    push!(event_states, event_state)
+                else
+                    # Cell out of bounds, assume no event
+                    push!(event_states, NO_EVENT)
+                end
+            end
+            
+            observation = GridObservation(agent.id, action.target_cells, event_states, [])
             push!(agent.observation_history, observation)
             
-            println("  Agent $(agent.id): $(length(action.target_cells)) cells sensed")
+            # Debug: print what was observed
+            if !isempty(event_states)
+                events_found = count(==(EVENT_PRESENT), event_states)
+                println("  Agent $(agent.id): $(length(action.target_cells)) cells sensed, $(events_found) events found")
+            else
+                println("  Agent $(agent.id): $(length(action.target_cells)) cells sensed")
+            end
         end
         
         # Record environment state and actions for visualization

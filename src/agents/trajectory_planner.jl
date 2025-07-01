@@ -12,7 +12,7 @@ using ..Types
 # Import types from the parent module
 import ..Types.Trajectory, ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.RangeLimitedSensor, ..Types.GridObservation
 
-export get_position_at_time, calculate_trajectory_period
+export get_position_at_time, calculate_trajectory_period, execute_plan, get_action_from_tree
 
 """
 get_position_at_time(trajectory::CircularTrajectory, time::Int)
@@ -120,6 +120,59 @@ Creates a linear trajectory
 """
 function create_linear_trajectory(start_x::Int, start_y::Int, end_x::Int, end_y::Int, period::Int)
     return LinearTrajectory(start_x, start_y, end_x, end_y, period)
+end
+
+"""
+get_action_from_tree(policy_tree, local_obs_history::Vector{GridObservation})
+Gets the appropriate action from a policy tree based on observation history
+"""
+function get_action_from_tree(policy_tree, local_obs_history::Vector{GridObservation})
+    # TODO: Implement policy tree traversal based on observation history
+    # For now, return the first available action or nothing
+    if isempty(policy_tree)
+        return nothing
+    end
+    
+    # Simple implementation: return first action in tree
+    # In a real implementation, this would traverse the tree based on observations
+    return first(policy_tree)
+end
+
+"""
+execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation})
+Execute agent's current plan and return the next action to take
+"""
+function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation})
+    agent_id = agent.id
+    
+    if plan === nothing
+        # No plan available, use default wait action
+        return SensingAction(agent_id, Tuple{Int, Int}[], false)
+    end
+    
+    if plan_type == :script
+        # Execute macro-script (open-loop)
+        # For now, just return the first action in the script
+        if !isempty(plan)
+            return plan[1]
+        else
+            # Script empty, use wait action
+            return SensingAction(agent_id, Tuple{Int, Int}[], false)
+        end
+        
+    elseif plan_type == :policy
+        # Execute policy tree (closed-loop)
+        action = get_action_from_tree(plan, local_obs_history)
+        if action === nothing
+            # No policy found, use wait action
+            return SensingAction(agent_id, Tuple{Int, Int}[], false)
+        else
+            return action
+        end
+        
+    else
+        error("Unknown plan type: $(plan_type)")
+    end
 end
 
 end # module 

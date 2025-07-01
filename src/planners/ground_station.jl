@@ -4,25 +4,28 @@ using POMDPs
 using POMDPTools
 using Random
 using ..Types
+using ..Environment
 using ..Agents
 
 # Import planner modules
-include("macro_planner.jl")
+include("macro_planner_async.jl")
 include("policy_tree_planner.jl")
 
-using .MacroPlanner
+using .MacroPlannerAsync
 using .PolicyTreePlanner
 
 # Import Agent type from TrajectoryPlanner
 include("../agents/trajectory_planner.jl")
-using .TrajectoryPlanner: Agent, get_position_at_time
+using .TrajectoryPlanner: get_position_at_time
 
 # Import types from the parent module (Planners)
 import ..Types.EventState, ..Types.NO_EVENT, ..Types.EVENT_PRESENT
 import ..Types.SensingAction, ..Types.GridObservation, ..Types.Agent
 import ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.RangeLimitedSensor
 import ..Types.EventState2, ..Types.NO_EVENT_2, ..Types.EVENT_PRESENT_2
-import ..EventDynamicsModule
+# Import EventDynamicsModule functions through Environment
+import ..Environment.EventDynamicsModule.DBNTransitionModel2, ..Environment.EventDynamicsModule.predict_next_belief_dbn
+import ..Agents.BeliefManagement
 export maybe_sync!, GroundStationState
 
 """
@@ -61,6 +64,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
             
             # Upload observations since last contact
             observations = get_agent_observations_since_sync(agent, gs_state.agent_last_sync[agent_id], t)
+            println("📊 Agent $(agent_id) uploading $(length(observations)) observations since last sync (t=$(gs_state.agent_last_sync[agent_id]))")
             update_global_belief!(gs_state.global_belief, observations, env)
             
             # Calculate contact horizon (steps until next sync)
@@ -73,7 +77,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
             # Compute new plan based on planning mode
             if planning_mode == :script
                 println("📋 Computing macro-script for agent $(agent_id)")
-                new_plan = MacroPlanner.best_script(env, gs_state.global_belief, agent, C_i, other_plans, rng=rng)
+                new_plan = MacroPlannerAsync.best_script(env, gs_state.global_belief, agent, C_i, other_plans, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :script
             elseif planning_mode == :policy
                 println("🌳 Computing policy tree for agent $(agent_id)")
@@ -114,18 +118,142 @@ end
 Get agent's observations since last synchronization
 """
 function get_agent_observations_since_sync(agent, last_sync::Int, current_time::Int)
-    # For now, return empty observations
-    # In a full implementation, this would retrieve stored observations
-    return GridObservation[]
+    # Get observations that occurred after the last sync time
+    # Assumes observations are added to history in chronological order (one per time step)
+    
+    if last_sync == -1
+        # First sync - return all observations
+        return copy(agent.observation_history)
+    end
+    
+    # Calculate how many observations to skip (one per time step since last sync)
+    observations_since_sync = current_time - last_sync
+    
+    if observations_since_sync <= 0
+        # No new observations since last sync
+        return GridObservation[]
+    end
+    
+    # Get the most recent observations (last observations_since_sync observations)
+    total_observations = length(agent.observation_history)
+    start_index = max(1, total_observations - observations_since_sync + 1)
+    
+    if start_index > total_observations
+        # No observations available
+        return GridObservation[]
+    end
+    
+    # Return the observations since last sync
+    return agent.observation_history[start_index:end]
 end
 
 """
-Update global belief with new observations
+Update global belief with new observations using proper Bayesian updating
+Processes observations chronologically and applies transition models to unobserved cells
 """
 function update_global_belief!(global_belief, observations::Vector{GridObservation}, env)
-    # For now, do nothing
-    # In a full implementation, this would update the global belief using Bayes rule
+    if isempty(observations)
+        println("🔄 No new observations to update global belief")
+        return
+    end
+    
     println("🔄 Updating global belief with $(length(observations)) observations")
+    
+    # Create DBN transition model for belief propagation
+    dbn_model = DBNTransitionModel2(env.event_dynamics)
+    
+    # Get current belief probabilities
+    current_probabilities = copy(global_belief.event_probabilities)
+    height, width = size(current_probabilities)
+    
+    # Process observations chronologically (they should be in order from get_agent_observations_since_sync)
+    for (obs_idx, observation) in enumerate(observations)
+        agent_id = observation.agent_id
+        sensed_cells = observation.sensed_cells
+        event_states = observation.event_states
+        
+        println("  📡 Processing observation $(obs_idx): Agent $(agent_id) observed $(length(sensed_cells)) cells")
+        
+        # First, apply transition model to ALL cells (simulate environment evolution)
+        # This represents what happens between observations
+        new_probabilities = similar(current_probabilities)
+        
+        for y in 1:height
+            for x in 1:width
+                # Get neighbor beliefs for transition model
+                neighbor_beliefs = get_neighbor_beliefs(current_probabilities, x, y)
+                
+                # Apply DBN transition model to predict next belief
+                new_probabilities[y, x] = predict_next_belief_dbn(
+                    current_probabilities[y, x], 
+                    neighbor_beliefs, 
+                    dbn_model
+                )
+            end
+        end
+        
+        # Update current probabilities with transition results
+        current_probabilities = new_probabilities
+        
+        # Now apply Bayesian updating for observed cells
+        for (i, cell) in enumerate(sensed_cells)
+            if i <= length(event_states)
+                event_state = event_states[i]
+                x, y = cell
+                
+                if 1 <= x <= width && 1 <= y <= height
+                    # Get prior probability (after transition)
+                    prior_prob = current_probabilities[y, x]
+                    
+                    # Apply Bayesian updating based on observation
+                    if event_state == EVENT_PRESENT
+                        # P(event|observation) = P(observation|event) * P(event) / P(observation)
+                        # Assuming P(observation|event) = 0.9 and P(observation|no_event) = 0.1
+                        likelihood_event = 1
+                        likelihood_no_event = 0
+                        posterior = (likelihood_event * prior_prob) / (likelihood_event * prior_prob + likelihood_no_event * (1 - prior_prob))
+                        current_probabilities[y, x] = posterior
+                        println("    🎯 Cell ($(x),$(y)): Event observed, updated from $(round(prior_prob, digits=3)) to $(round(posterior, digits=3))")
+                    elseif event_state == NO_EVENT
+                        # P(no_event|observation) = P(observation|no_event) * P(no_event) / P(observation)
+                        likelihood_event = 0
+                        likelihood_no_event = 1
+                        posterior = (likelihood_no_event * (1 - prior_prob)) / (likelihood_event * prior_prob + likelihood_no_event * (1 - prior_prob))
+                        current_probabilities[y, x] = 1.0 - posterior
+                        println("    🎯 Cell ($(x),$(y)): No event observed, updated from $(round(prior_prob, digits=3)) to $(round(1.0 - posterior, digits=3))")
+                    end
+                end
+            end
+        end
+    end
+    
+    # Update the global belief with final probabilities
+    global_belief.event_probabilities = current_probabilities
+    
+    println("✅ Global belief updated with proper Bayesian inference")
+end
+
+"""
+Get neighbor beliefs for a cell (helper function for transition model)
+"""
+function get_neighbor_beliefs(probabilities::Matrix{Float64}, x::Int, y::Int)
+    neighbor_beliefs = Float64[]
+    height, width = size(probabilities)
+    
+    for dx in -1:1
+        for dy in -1:1
+            if dx == 0 && dy == 0
+                continue
+            end
+            
+            nx, ny = x + dx, y + dy
+            if 1 <= nx <= width && 1 <= ny <= height
+                push!(neighbor_beliefs, probabilities[ny, nx])
+            end
+        end
+    end
+    
+    return neighbor_beliefs
 end
 
 """
@@ -177,79 +305,26 @@ end
 Initialize global belief
 """
 function initialize_global_belief(env)
-    # For now, return a simple belief structure
-    # In a full implementation, this would initialize a proper belief state
-    return Dict("probabilities" => fill(0.1, env.height, env.width))
+    # Initialize with uniform prior probability using proper Belief type
+    # In a real system, this could be based on historical data or domain knowledge
+    prior_probability = 0.1  # Low prior probability for events (most cells are empty)
+    return BeliefManagement.initialize_belief(env.width, env.height, prior_probability)
 end
 
 """
-Get agent's current position
+Get agent's current plan from ground station
 """
-function get_agent_position(agent, env)
-    # For now, return a default position
-    # In a full implementation, this would get the agent's actual position
-    return (1, 1)
-end
-
-"""
-Execute agent's current plan
-"""
-function execute_plan(agent, gs_state::GroundStationState, local_obs_history::Vector{GridObservation})
+function get_agent_plan(agent, gs_state::GroundStationState)
     agent_id = agent.id
     
     # Get plan from ground station state
     plan = get(gs_state.agent_plans, agent_id, nothing)
     plan_type = get(gs_state.agent_plan_types, agent_id, :script)
     
-    if plan === nothing
-        # No plan available, use default wait action
-        return SensingAction(agent.id, Tuple{Int, Int}[], false)
-    end
-    
-    if plan_type == :script
-        # Execute macro-script (open-loop)
-        # For now, just return the first action in the script
-        if !isempty(plan)
-            return plan[1]
-        else
-            # Script empty, use wait action
-            return SensingAction(agent.id, Tuple{Int, Int}[], false)
-        end
-        
-    elseif plan_type == :policy
-        # Execute policy tree (closed-loop)
-        action = get_action_from_tree(plan, local_obs_history)
-        if action === nothing
-            # No policy found, use wait action
-            return SensingAction(agent.id, Tuple{Int, Int}[], false)
-        else
-            return action
-        end
-        
-    else
-        error("Unknown plan type: $(plan_type)")
-    end
+    return plan, plan_type
 end
 
-"""
-Get action from policy tree based on observation history
-"""
-function get_action_from_tree(tree, obs_history::Vector{GridObservation})
-    # Try to find exact match
-    if haskey(tree, obs_history)
-        return tree[obs_history]
-    end
-    
-    # Try to find partial match (use longest matching prefix)
-    for i in length(obs_history)-1:-1:0
-        prefix = obs_history[1:i]
-        if haskey(tree, prefix)
-            return tree[prefix]
-        end
-    end
-    
-    return nothing
-end
+
 
 """
 Print ground station status

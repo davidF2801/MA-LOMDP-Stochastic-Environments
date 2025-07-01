@@ -11,8 +11,8 @@ import ..Types.SensingAction, ..Types.GridObservation, ..Types.Agent
 import ..Types.Trajectory, ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.RangeLimitedSensor
 import ..Types.EventDynamics, ..Types.TwoStateEventDynamics, ..Types.Deterministic
 
-# Import belief management types from Agents module
-import ..Agents.BeliefManagement: initialize_belief, Belief
+# Import belief management types from Types module
+import ..Types.Belief
 
 """
 GridState - Represents the state of the spatial grid
@@ -88,6 +88,45 @@ end
 
 function get_trajectory_period(trajectory::LinearTrajectory)
     return trajectory.period
+end
+
+"""
+initialize_belief(grid_width::Int, grid_height::Int, prior_probability::Float64=0.5)
+Initializes belief state with uniform prior
+"""
+function initialize_belief(grid_width::Int, grid_height::Int, prior_probability::Float64=0.5)
+    event_probabilities = fill(prior_probability, grid_height, grid_width)
+    uncertainty_map = calculate_uncertainty_map(event_probabilities)
+    
+    return Belief(event_probabilities, uncertainty_map, 0, [])
+end
+
+"""
+calculate_uncertainty_map(probabilities::Matrix{Float64})
+Calculates uncertainty map from probability map
+"""
+function calculate_uncertainty_map(probabilities::Matrix{Float64})
+    uncertainty = Matrix{Float64}(undef, size(probabilities))
+    
+    for i in 1:size(probabilities, 1)
+        for j in 1:size(probabilities, 2)
+            uncertainty[i, j] = calculate_uncertainty(probabilities[i, j])
+        end
+    end
+    
+    return uncertainty
+end
+
+"""
+calculate_uncertainty(probability::Float64)
+Calculates uncertainty for a single probability value
+"""
+function calculate_uncertainty(probability::Float64)
+    # Using entropy as uncertainty measure
+    if probability <= 0.0 || probability >= 1.0
+        return 0.0
+    end
+    return -(probability * log(probability) + (1 - probability) * log(1 - probability))
 end
 
 """

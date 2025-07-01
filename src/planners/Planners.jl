@@ -8,11 +8,11 @@ using ..Environment
 using ..Agents
 
 # Export submodules
-export GroundStation, MacroPlanner, PolicyTreePlanner
+export GroundStation, MacroPlannerAsync, PolicyTreePlanner
 
 # Include submodules
 include("ground_station.jl")
-include("macro_planner.jl")
+include("macro_planner_async.jl")
 include("policy_tree_planner.jl")
 
 end # module 

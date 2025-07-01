@@ -131,6 +131,32 @@ Base.rand(rng::AbstractRNG, d::DeterministicDistribution) = d.value
 const Deterministic = DeterministicDistribution
 
 """
+Belief - Represents a belief state over the environment
+"""
+mutable struct Belief
+    event_probabilities::Matrix{Float64}  # Probability of events at each cell
+    uncertainty_map::Matrix{Float64}      # Uncertainty at each cell
+    last_update::Int                      # Last update time step
+    history::Vector{Tuple{SensingAction, GridObservation}}
+end
+
+# Add copy method for Belief
+Base.copy(belief::Belief) = Belief(
+    copy(belief.event_probabilities),
+    copy(belief.uncertainty_map),
+    belief.last_update,
+    copy(belief.history)
+)
+
+# Add deepcopy method for Belief
+Base.deepcopy(belief::Belief) = Belief(
+    deepcopy(belief.event_probabilities),
+    deepcopy(belief.uncertainty_map),
+    belief.last_update,
+    deepcopy(belief.history)
+)
+
+"""
 Agent - Represents an autonomous agent in the multi-agent system
 """
 mutable struct Agent
@@ -160,6 +186,7 @@ export SensingAction, GridObservation, RangeLimitedSensor
 export Trajectory, CircularTrajectory, LinearTrajectory
 export EventDynamics, TwoStateEventDynamics
 export DeterministicDistribution, Deterministic
+export Belief
 export Agent
 
 end # module Types 

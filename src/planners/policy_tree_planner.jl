@@ -9,7 +9,8 @@ import ..EventState, ..NO_EVENT, ..EVENT_PRESENT
 import ..EventState2, ..NO_EVENT_2, ..EVENT_PRESENT_2
 import ..SensingAction, ..GridObservation, ..Agent
 import ..CircularTrajectory, ..LinearTrajectory, ..RangeLimitedSensor
-import ..get_position_at_time
+# Import trajectory functions
+import ..Agents.TrajectoryPlanner.get_position_at_time
 import ..EventDynamicsModule
 
 export best_policy_tree, enumerate_policy_tree
