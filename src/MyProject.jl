@@ -2,14 +2,22 @@ module MyProject
 
 # Main module for Multi-Agent Locally Observable MDP (MA-LOMDP)
 
+# Include and load Types module first
+include("types/Types.jl")
+using .Types
+
 # Export submodules
-export Environment, Agents
+export Agents, Environment, Planners, Types
 
 # Include submodules
-include("environment/Environment.jl")
 include("agents/Agents.jl")
+include("environment/Environment.jl")
+include("planners/Planners.jl")
 
 # Re-export commonly used functions
-export simulate_environment, update_belief, plan_sensing, evaluate_policy
+export simulate_environment
+
+# Re-export commonly used types from Types module
+export Agent, SpatialGrid, SensingAction, GroundStation, EventState, NO_EVENT, EVENT_PRESENT, CircularTrajectory, LinearTrajectory, RangeLimitedSensor
 
 end # module 

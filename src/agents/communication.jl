@@ -1,7 +1,7 @@
 using POMDPs
 using POMDPTools
-using POMDPPolicies
 using Distributions
+using Random
 
 """
 Communication - Handles different communication protocols between agents
@@ -10,8 +10,10 @@ module Communication
 
 using POMDPs
 using POMDPTools
-using POMDPPolicies
 using Distributions
+using Random
+
+#import ..Agent
 
 export CentralizedProtocol, DecentralizedProtocol, HybridProtocol, communicate_beliefs
 
@@ -39,67 +41,67 @@ struct HybridProtocol
     ground_station_id::Int        # Ground station identifier
 end
 
-"""
-communicate_beliefs(protocol::CentralizedProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, time_step::Int)
-Centralized communication protocol
-"""
-function communicate_beliefs(protocol::CentralizedProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, time_step::Int)
-    # TODO: Implement centralized communication
-    # - Check if it's time to communicate
-    # - Send beliefs to global planner
-    # - Receive updated policies
+# """
+# communicate_beliefs(protocol::CentralizedProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, time_step::Int)
+# Centralized communication protocol
+# """
+# function communicate_beliefs(protocol::CentralizedProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, time_step::Int)
+#     # TODO: Implement centralized communication
+#     # - Check if it's time to communicate
+#     # - Send beliefs to global planner
+#     # - Receive updated policies
     
-    if time_step % protocol.communication_frequency == 0
-        println("Centralized communication at time step $time_step")
-        # TODO: Implement actual communication logic
-    end
+#     if time_step % protocol.communication_frequency == 0
+#         println("Centralized communication at time step $time_step")
+#         # TODO: Implement actual communication logic
+#     end
     
-    return beliefs
-end
+#     return beliefs
+# end
 
-"""
-communicate_beliefs(protocol::DecentralizedProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, positions::Vector{Tuple{Int, Int}})
-Decentralized communication protocol
-"""
-function communicate_beliefs(protocol::DecentralizedProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, positions::Vector{Tuple{Int, Int}})
-    # TODO: Implement decentralized communication
-    # - Find neighbors within communication range
-    # - Exchange beliefs with neighbors
-    # - Fuse beliefs using specified method
+# """
+# communicate_beliefs(protocol::DecentralizedProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, positions::Vector{Tuple{Int, Int}})
+# Decentralized communication protocol
+# """
+# function communicate_beliefs(protocol::DecentralizedProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, positions::Vector{Tuple{Int, Int}})
+#     # TODO: Implement decentralized communication
+#     # - Find neighbors within communication range
+#     # - Exchange beliefs with neighbors
+#     # - Fuse beliefs using specified method
     
-    num_agents = length(agents)
-    updated_beliefs = copy(beliefs)
+#     num_agents = length(agents)
+#     updated_beliefs = copy(beliefs)
     
-    for i in 1:num_agents
-        neighbors = find_neighbors(i, positions, protocol.neighbor_radius)
+#     for i in 1:num_agents
+#         neighbors = find_neighbors(i, positions, protocol.neighbor_radius)
         
-        if !isempty(neighbors)
-            # Fuse beliefs with neighbors
-            fused_belief = fuse_beliefs(beliefs[i], [beliefs[j] for j in neighbors], protocol.fusion_method)
-            updated_beliefs[i] = fused_belief
-        end
-    end
+#         if !isempty(neighbors)
+#             # Fuse beliefs with neighbors
+#             fused_belief = fuse_beliefs(beliefs[i], [beliefs[j] for j in neighbors], protocol.fusion_method)
+#             updated_beliefs[i] = fused_belief
+#         end
+#     end
     
-    return updated_beliefs
-end
+#     return updated_beliefs
+# end
 
-"""
-communicate_beliefs(protocol::HybridProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, time_step::Int)
-Hybrid communication protocol
-"""
-function communicate_beliefs(protocol::HybridProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, time_step::Int)
-    # TODO: Implement hybrid communication
-    # - Check if it's time to sync with ground station
-    # - Send local beliefs to ground station
-    # - Receive updated global information
+# """
+# communicate_beliefs(protocol::HybridProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, time_step::Int)
+# Hybrid communication protocol
+# """
+# function communicate_beliefs(protocol::HybridProtocol, agents::Vector{Agent}, beliefs::Vector{Matrix{Float64}}, time_step::Int)
+#     # TODO: Implement hybrid communication
+#     # - Check if it's time to sync with ground station
+#     # - Send local beliefs to ground station
+#     # - Receive updated global information
     
-    if time_step % protocol.sync_frequency == 0
-        println("Hybrid communication with ground station at time step $time_step")
-        # TODO: Implement actual communication logic
-    end
+#     if time_step % protocol.sync_frequency == 0
+#         println("Hybrid communication with ground station at time step $time_step")
+#         # TODO: Implement actual communication logic
+#     end
     
-    return beliefs
-end
+#     return beliefs
+# end
 
 """
 find_neighbors(agent_id::Int, positions::Vector{Tuple{Int, Int}}, radius::Float64)

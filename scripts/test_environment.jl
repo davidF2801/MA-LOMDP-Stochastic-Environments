@@ -29,10 +29,10 @@ function test_spatial_grid()
         0.3   # neighbor_influence
     )
     
-    # Create agents with trajectories
+    # Create agents with trajectories and beliefs
     agents = [
-        Agent(1, CircularTrajectory(5, 5, 3.0, 10), RangeLimitedSensor(2.0, π/2, 0.0), 0),
-        Agent(2, LinearTrajectory(1, 1, 10, 10, 15), RangeLimitedSensor(2.5, π/3, 0.0), 0)
+        create_agent(1, CircularTrajectory(5, 5, 3.0, 10), RangeLimitedSensor(2.0, π/2, 0.0), 10, 10),
+        create_agent(2, LinearTrajectory(1, 1, 10, 10, 15), RangeLimitedSensor(2.5, π/3, 0.0), 10, 10)
     ]
     
     # Create spatial grid environment
@@ -85,6 +85,17 @@ function test_spatial_grid()
     println("\n--- Testing Reward Calculation ---")
     reward_val = POMDPs.reward(env, initial_state, action, next_state)
     println("Reward calculated: $(reward_val)")
+    
+    # Test belief-based reward
+    println("\n--- Testing Belief-Based Reward ---")
+    agent1 = env.agents[1]
+    println("Agent 1 initial belief mean: $(mean(agent1.belief.event_probabilities))")
+    println("Agent 1 belief uncertainty mean: $(mean(agent1.belief.uncertainty_map))")
+    
+    # Calculate reward again to see if belief changes
+    reward_val2 = POMDPs.reward(env, initial_state, action, next_state)
+    println("Reward after belief update: $(reward_val2)")
+    println("Agent 1 belief mean after reward: $(mean(agent1.belief.event_probabilities))")
     
     # Test discount
     println("\n--- Testing Discount ---")

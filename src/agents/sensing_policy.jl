@@ -1,7 +1,7 @@
 using POMDPs
 using POMDPTools
-using POMDPPolicies
 using Distributions
+using Random
 
 """
 SensingPolicy - Implements different strategies for sensing decisions
@@ -10,8 +10,11 @@ module SensingPolicy
 
 using POMDPs
 using POMDPTools
-using POMDPPolicies
 using Distributions
+using Random
+
+# Define our own Policy type instead of using POMDPPolicies
+abstract type Policy end
 
 export InformationGainPolicy, RandomSensingPolicy, GreedySensingPolicy, select_sensing_targets
 

@@ -1,6 +1,8 @@
 using POMDPs
 using POMDPTools
 using Distributions
+using Random
+using ..Types
 using LinearAlgebra
 
 """
@@ -11,39 +13,28 @@ module SensorModels
 using POMDPs
 using POMDPTools
 using Distributions
+using Random
+using ..Types
 using LinearAlgebra
 
-export RangeLimitedSensor, generate_observation, calculate_footprint
+# Import types from the parent module
+import ..Types: EventState, RangeLimitedSensor
 
-"""
-RangeLimitedSensor - Model of a range-limited sensor
-"""
-struct RangeLimitedSensor
-    range::Float64           # Sensing range
-    field_of_view::Float64   # Field of view angle (radians)
-    noise_level::Float64     # Observation noise
-end
+export generate_observation, calculate_footprint, is_within_range, calculate_information_gain, calculate_entropy
 
 """
 generate_observation(sensor::RangeLimitedSensor, agent_pos::Tuple{Int, Int}, event_map::Matrix{EventState}, target_cells::Vector{Tuple{Int, Int}})
 Generates observations for the specified target cells
 """
 function generate_observation(sensor::RangeLimitedSensor, agent_pos::Tuple{Int, Int}, event_map::Matrix{EventState}, target_cells::Vector{Tuple{Int, Int}})
-    # TODO: Implement observation generation
-    # - Check if cells are within sensor range
-    # - Generate noise-free observations
-    # - Apply sensor noise if needed
-    
     observed_states = EventState[]
     sensed_cells = Tuple{Int, Int}[]
-    
     for cell in target_cells
         if is_within_range(sensor, agent_pos, cell)
             push!(sensed_cells, cell)
             push!(observed_states, event_map[cell[2], cell[1]])
         end
     end
-    
     return sensed_cells, observed_states
 end
 
@@ -52,13 +43,8 @@ calculate_footprint(sensor::RangeLimitedSensor, agent_pos::Tuple{Int, Int}, grid
 Calculates the sensor footprint (all cells within range)
 """
 function calculate_footprint(sensor::RangeLimitedSensor, agent_pos::Tuple{Int, Int}, grid_width::Int, grid_height::Int)
-    # TODO: Implement footprint calculation
-    # - Find all cells within sensor range
-    # - Consider field of view constraints
-    
     footprint = Tuple{Int, Int}[]
     ax, ay = agent_pos
-    
     for x in 1:grid_width
         for y in 1:grid_height
             distance = sqrt((x - ax)^2 + (y - ay)^2)
@@ -67,7 +53,6 @@ function calculate_footprint(sensor::RangeLimitedSensor, agent_pos::Tuple{Int, I
             end
         end
     end
-    
     return footprint
 end
 
@@ -85,25 +70,14 @@ calculate_information_gain(belief::Matrix{Float64}, observed_cells::Vector{Tuple
 Calculates information gain from observations
 """
 function calculate_information_gain(belief::Matrix{Float64}, observed_cells::Vector{Tuple{Int, Int}}, observed_states::Vector{EventState})
-    # TODO: Implement information gain calculation
-    # - Entropy reduction
-    # - KL divergence
-    # - Uncertainty reduction
-    
     total_gain = 0.0
-    
     for (i, cell) in enumerate(observed_cells)
         x, y = cell
         prior_entropy = calculate_entropy(belief[y, x])
-        
-        # Update belief based on observation
-        # TODO: Implement belief update
-        
         posterior_entropy = calculate_entropy(belief[y, x])
         gain = prior_entropy - posterior_entropy
         total_gain += gain
     end
-    
     return total_gain
 end
 

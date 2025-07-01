@@ -1,59 +1,188 @@
+"""
+EventDynamicsModule - Models stochastic event evolution in the spatial grid
+"""
+module EventDynamicsModule
+
 using POMDPs
 using POMDPTools
 using Distributions
 using LinearAlgebra
+using Random
+using ..Types
+
+# Import types from the parent module
+import ..Types.EventState, ..Types.EventState2, ..Types.EventState4, ..Types.NO_EVENT_2, ..Types.EVENT_PRESENT_2, ..Types.NO_EVENT_4, ..Types.EVENT_PRESENT_4, ..Types.EVENT_SPREADING_4, ..Types.EVENT_DECAYING_4
+import ..Types.EventDynamics, ..Types.TwoStateEventDynamics
+
+export DBNTransitionModel2, DBNTransitionModel4, transition_probability_dbn, predict_next_belief_dbn, update_events!, get_neighbor_states, initialize_random_events
+
+# """
+# Abstract type for different event state enums
+# """
+# abstract type EventStateEnum end
+
+# # EventState2 and EventState4 are now imported from types.jl
 
 """
-EventDynamics - Models stochastic event evolution in the spatial grid
+Abstract type for transition models
 """
-struct EventDynamics
-    birth_rate::Float64      # Rate of new events appearing
-    death_rate::Float64      # Rate of events disappearing
-    spread_rate::Float64     # Rate of events spreading to neighbors
-    decay_rate::Float64      # Rate of events decaying
-    neighbor_influence::Float64  # Influence of neighboring cells
+abstract type TransitionModel end
+
+"""
+DBN-based transition model for 2-state events
+"""
+struct DBNTransitionModel2 <: TransitionModel
+    birth_rate::Float64
+    death_rate::Float64
+    neighbor_influence::Float64
 end
 
 """
-update_events!(dynamics::EventDynamics, event_map::Matrix{EventState}, rng::AbstractRNG)
-Updates event states based on stochastic dynamics
+DBN-based transition model for 4-state events
 """
-function update_events!(dynamics::EventDynamics, event_map::Matrix{EventState}, rng::AbstractRNG)
-    # TODO: Implement event update logic
-    # - Birth of new events
-    # - Death of existing events
-    # - Spread to neighboring cells
-    # - Decay of events
+struct DBNTransitionModel4 <: TransitionModel
+    birth_rate::Float64
+    death_rate::Float64
+    spread_rate::Float64
+    decay_rate::Float64
+    neighbor_influence::Float64
+end
+
+# Convert legacy EventDynamics to new DBN model
+function DBNTransitionModel2(dynamics::EventDynamics)
+    return DBNTransitionModel2(dynamics.birth_rate, dynamics.death_rate, dynamics.neighbor_influence)
+end
+
+function DBNTransitionModel4(dynamics::EventDynamics)
+    return DBNTransitionModel4(dynamics.birth_rate, dynamics.death_rate, dynamics.spread_rate, dynamics.decay_rate, dynamics.neighbor_influence)
 end
 
 """
-calculate_spread_probability(dynamics::EventDynamics, current_state::EventState, neighbor_states::Vector{EventState})
-Calculates probability of event spreading based on current and neighbor states
+DBN local conditional probability for 2-state events:
+    Pr(x_{t+1} = EVENT_PRESENT | x_t, neighbors)
 """
-function calculate_spread_probability(dynamics::EventDynamics, current_state::EventState, neighbor_states::Vector{EventState})
-    # TODO: Implement spread probability calculation
-    if current_state == NO_EVENT
-        # Probability of new event based on neighbor influence
-        neighbor_events = count(x -> x != NO_EVENT, neighbor_states)
-        return dynamics.birth_rate * (1 + dynamics.neighbor_influence * neighbor_events)
-    elseif current_state == EVENT_PRESENT
-        # Probability of spreading or decaying
-        return dynamics.spread_rate
-    elseif current_state == EVENT_SPREADING
-        # Probability of continuing to spread or decaying
-        return dynamics.spread_rate
-    else  # EVENT_DECAYING
-        # Probability of disappearing
-        return dynamics.death_rate
+function transition_probability_dbn(current_state::EventState2, neighbor_states::Vector{EventState2}, model::DBNTransitionModel2)
+    num_active_neighbors = count(==(EVENT_PRESENT_2), neighbor_states)
+
+    if current_state == EVENT_PRESENT_2
+        # Persistence vs death
+        return max(0.0, min(1.0, 1.0 - model.death_rate))
+    else
+        # Birth from neighbors
+        return max(0.0, min(1.0, model.birth_rate + model.neighbor_influence * num_active_neighbors))
     end
 end
 
 """
-get_neighbor_states(event_map::Matrix{EventState}, x::Int, y::Int)
-Gets the states of neighboring cells (8-connectivity)
+DBN local conditional probability for 4-state events
 """
-function get_neighbor_states(event_map::Matrix{EventState}, x::Int, y::Int)
-    neighbors = EventState[]
+function transition_probability_dbn(current_state::EventState4, neighbor_states::Vector{EventState4}, model::DBNTransitionModel4)
+    num_active_neighbors = count(x -> x == EVENT_PRESENT_4 || x == EVENT_SPREADING_4, neighbor_states)
+
+    if current_state == NO_EVENT_4
+        # Birth from neighbors
+        return max(0.0, min(1.0, model.birth_rate + model.neighbor_influence * num_active_neighbors))
+    elseif current_state == EVENT_PRESENT_4
+        # Can spread or start decaying
+        return max(0.0, min(1.0, model.spread_rate))
+    elseif current_state == EVENT_SPREADING_4
+        # Continue spreading or start decaying
+        return max(0.0, min(1.0, model.spread_rate))
+    else  # EVENT_DECAYING_4
+        # Probability of disappearing
+        return max(0.0, min(1.0, model.death_rate))
+    end
+end
+
+"""
+Compute updated belief for a cell using DBN (2-state)
+"""
+function predict_next_belief_dbn(b_k::Float64, b_neighbors::Vector{Float64}, model::DBNTransitionModel2)
+    # Expected number of active neighbors
+    E_neighbors = sum(b_neighbors)
+
+    # Case 1: x_t = 1 → survives with (1 - death_rate)
+    p1 = 1.0 - model.death_rate
+
+    # Case 2: x_t = 0 → activates with birth + influence
+    p0 = model.birth_rate + model.neighbor_influence * E_neighbors
+
+    # Total new belief
+    return b_k * p1 + (1.0 - b_k) * p0
+end
+
+"""
+Compute updated belief for a cell using DBN (4-state)
+"""
+function predict_next_belief_dbn(b_k::Float64, b_neighbors::Vector{Float64}, model::DBNTransitionModel4)
+    # For 4-state, we need to handle the different state transitions
+    # This is a simplified version - can be extended for full 4-state belief
+    E_neighbors = sum(b_neighbors)
+
+    # Simplified: treat as 2-state for belief update
+    p1 = 1.0 - model.death_rate
+    p0 = model.birth_rate + model.neighbor_influence * E_neighbors
+
+    return b_k * p1 + (1.0 - b_k) * p0
+end
+
+"""
+Update events using DBN model (2-state)
+"""
+function update_events!(model::DBNTransitionModel2, event_map::Matrix{EventState2}, rng::AbstractRNG)
+    height, width = size(event_map)
+    new_map = similar(event_map)
+
+    for y in 1:height
+        for x in 1:width
+            current = event_map[y, x]
+            neighbors = get_neighbor_states(event_map, x, y)
+            p = transition_probability_dbn(current, neighbors, model)
+            new_map[y, x] = rand(rng) < p ? EVENT_PRESENT_2 : NO_EVENT_2
+        end
+    end
+
+    event_map .= new_map
+end
+
+"""
+Update events using DBN model (4-state)
+"""
+function update_events!(model::DBNTransitionModel4, event_map::Matrix{EventState4}, rng::AbstractRNG)
+    height, width = size(event_map)
+    new_map = similar(event_map)
+
+    for y in 1:height
+        for x in 1:width
+            current = event_map[y, x]
+            neighbors = get_neighbor_states(event_map, x, y)
+            p = transition_probability_dbn(current, neighbors, model)
+            
+            # Determine next state based on probability
+            if rand(rng) < p
+                if current == NO_EVENT_4
+                    new_map[y, x] = EVENT_PRESENT_4
+                elseif current == EVENT_PRESENT_4
+                    new_map[y, x] = rand(rng) < model.decay_rate ? EVENT_DECAYING_4 : EVENT_SPREADING_4
+                elseif current == EVENT_SPREADING_4
+                    new_map[y, x] = rand(rng) < model.decay_rate ? EVENT_DECAYING_4 : EVENT_SPREADING_4
+                else  # EVENT_DECAYING_4
+                    new_map[y, x] = rand(rng) < model.death_rate ? NO_EVENT_4 : EVENT_DECAYING_4
+                end
+            else
+                new_map[y, x] = current
+            end
+        end
+    end
+
+    event_map .= new_map
+end
+
+"""
+Get neighbor states (generic version)
+"""
+function get_neighbor_states(event_map::Matrix{T}, x::Int, y::Int) where T
+    neighbors = T[]
     height, width = size(event_map)
     
     for dx in -1:1
@@ -73,16 +202,35 @@ function get_neighbor_states(event_map::Matrix{EventState}, x::Int, y::Int)
 end
 
 """
-initialize_random_events(event_map::Matrix{EventState}, num_events::Int, rng::AbstractRNG)
-Initializes random events in the grid
+Initialize random events (generic version)
 """
-function initialize_random_events(event_map::Matrix{EventState}, num_events::Int, rng::AbstractRNG)
-    # TODO: Implement random event initialization
+function initialize_random_events(event_map::Matrix{T}, num_events::Int, rng::AbstractRNG) where T
     height, width = size(event_map)
     
     for _ in 1:num_events
         x = rand(rng, 1:width)
         y = rand(rng, 1:height)
-        event_map[y, x] = EVENT_PRESENT
+        # Convert to appropriate event state
+        if T == EventState2
+            event_map[y, x] = EVENT_PRESENT_2
+        elseif T == EventState4
+            event_map[y, x] = EVENT_PRESENT_4
+        else
+            # For any other type, we'll need to handle it specifically
+            # For now, just skip if we don't know how to handle it
+            continue
+        end
     end
+end
+
+"""
+Legacy spread probability calculation for backward compatibility
+Note: This requires EventState to be defined elsewhere
+"""
+function calculate_spread_probability(dynamics::EventDynamics, current_state, neighbor_states)
+    # For now, return a simple probability based on dynamics
+    # This can be extended when EventState is properly defined
+    return dynamics.birth_rate
+end
+
 end 

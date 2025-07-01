@@ -1,8 +1,3 @@
-using POMDPs
-using POMDPTools
-using POMDPPolicies
-using LinearAlgebra
-
 """
 TrajectoryPlanner - Manages deterministic periodic trajectories for agents
 """
@@ -10,20 +5,14 @@ module TrajectoryPlanner
 
 using POMDPs
 using POMDPTools
-using POMDPPolicies
-using LinearAlgebra
+using Distributions
+using Random
+using ..Types
 
-export Agent, get_position_at_time, calculate_trajectory_period
+# Import types from the parent module
+import ..Types.Trajectory, ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.RangeLimitedSensor, ..Types.GridObservation
 
-"""
-Agent - Represents an agent with a deterministic periodic trajectory
-"""
-struct Agent
-    id::Int
-    trajectory::Trajectory
-    sensor::RangeLimitedSensor
-    current_time::Int
-end
+export get_position_at_time, calculate_trajectory_period
 
 """
 get_position_at_time(trajectory::CircularTrajectory, time::Int)
@@ -58,6 +47,16 @@ function get_position_at_time(trajectory::LinearTrajectory, time::Int)
 end
 
 """
+get_position_at_time(trajectory::LinearTrajectory, time::Int, phase_offset::Int)
+Gets agent position at a specific time for linear trajectory with phase offset
+"""
+function get_position_at_time(trajectory::LinearTrajectory, time::Int, phase_offset::Int)
+    # Apply phase offset to time
+    adjusted_time = time + phase_offset
+    return get_position_at_time(trajectory, adjusted_time)
+end
+
+"""
 calculate_trajectory_period(trajectory::Trajectory)
 Calculates the period of a trajectory
 """
@@ -69,14 +68,15 @@ function calculate_trajectory_period(trajectory::LinearTrajectory)
     return trajectory.period
 end
 
-"""
-update_agent_position!(agent::Agent, time::Int)
-Updates agent position based on current time
-"""
-function update_agent_position!(agent::Agent, time::Int)
-    # TODO: Implement position update
-    agent.current_time = time
-end
+# """
+# update_agent_position!(agent::Agent, time::Int)
+# Updates agent position based on current time
+# """
+# function update_agent_position!(agent::Agent, time::Int)
+#     # TODO: Implement position update
+#     # Note: Agent now uses phase_offset instead of current_time
+#     # Position is calculated dynamically from trajectory and time
+# end
 
 """
 get_trajectory_waypoints(trajectory::Trajectory, num_points::Int)

@@ -10,7 +10,6 @@ Pkg.activate(".")
 using MyProject
 using POMDPs
 using POMDPTools
-using POMDPPolicies
 using POMDPSimulators
 using Distributions
 using Random
