@@ -3,6 +3,7 @@ module MacroPlannerAsync
 using POMDPs
 using POMDPTools
 using Random
+using LinearAlgebra
 using ..Types
 import ..Agents.BeliefManagement: sample_from_belief
 # Import types from the parent module (Planners)
@@ -14,7 +15,8 @@ import ..Agents.TrajectoryPlanner.get_position_at_time
 # Import DBN functions for transition modeling
 import ..Environment.EventDynamicsModule.DBNTransitionModel2, ..Environment.EventDynamicsModule.predict_next_belief_dbn
 # Import belief management functions
-import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief
+import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
+       ..Agents.BeliefManagement.calculate_uncertainty_from_distribution
 
 export best_script
 
@@ -30,15 +32,12 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts)::Vector{Se
   – Return argmax sequence (ties → first).
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts; rng::AbstractRNG=Random.GLOBAL_RNG)
-    # Get available actions for the agent
-    available_actions = get_available_actions(agent, env)
+    # Enumerate all possible action sequences of length C considering trajectory
+    action_sequences = generate_action_sequences(agent, env, C)
     
-    if isempty(available_actions)
+    if isempty(action_sequences)
         return SensingAction[]
     end
-    
-    # Enumerate all possible action sequences of length C
-    action_sequences = generate_action_sequences(available_actions, C)
     
     best_sequence = SensingAction[]  # Default to empty sequence
     best_value = -Inf
@@ -64,20 +63,76 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts; rng::Abs
 end
 
 """
-Generate all possible action sequences of length C
+Generate all possible action sequences of length C considering agent trajectory
 """
-function generate_action_sequences(actions::Vector{SensingAction}, C::Int)
+function generate_action_sequences(agent, env, C::Int)
     if C == 0
         return Vector{SensingAction}[]
-    elseif C == 1
-        return [[action] for action in actions]
+    end
+    
+    # 1. Propagate agent trajectory for C timesteps
+    trajectory_positions = Vector{Tuple{Int, Int}}()
+    for t in 0:(C-1)
+        pos = get_agent_position_at_time(agent, env, t)
+        push!(trajectory_positions, pos)
+    end
+    
+    # 2. Get available actions for each timestep
+    actions_per_timestep = Vector{Vector{SensingAction}}()
+    for t in 1:C
+        pos = trajectory_positions[t]
+        for_cells = get_field_of_regard_at_position(agent, pos, env)
+        
+        # Generate actions for this timestep
+        timestep_actions = SensingAction[]
+        
+        # Add wait action
+        push!(timestep_actions, SensingAction(agent.id, Tuple{Int, Int}[], false))
+        
+        # Add single-cell sensing actions
+        for cell in for_cells
+            push!(timestep_actions, SensingAction(agent.id, [cell], false))
+        end
+        
+        # Add multi-cell sensing actions (up to max_sensing_targets)
+        if length(for_cells) > 1 && env.max_sensing_targets > 1
+            for subset_size in 2:min(env.max_sensing_targets, length(for_cells))
+                for subset in combinations(for_cells, subset_size)
+                    push!(timestep_actions, SensingAction(agent.id, collect(subset), false))
+                end
+            end
+        end
+        
+        push!(actions_per_timestep, timestep_actions)
+    end
+    
+    # 3. Generate all sequences by selecting one action per timestep
+    sequences = generate_sequences_from_actions_per_timestep(actions_per_timestep)
+    
+    return sequences
+end
+
+"""
+Generate all sequences by selecting one action per timestep
+"""
+function generate_sequences_from_actions_per_timestep(actions_per_timestep::Vector{Vector{SensingAction}})
+    if isempty(actions_per_timestep)
+        return Vector{SensingAction}[]
+    elseif length(actions_per_timestep) == 1
+        return [[action] for action in actions_per_timestep[1]]
     else
         sequences = Vector{SensingAction}[]
-        shorter_sequences = generate_action_sequences(actions, C - 1)
         
-        for action in actions
-            for shorter_seq in shorter_sequences
-                new_seq = [action; shorter_seq]
+        # Get actions for current timestep
+        current_actions = actions_per_timestep[1]
+        
+        # Recursively generate sequences for remaining timesteps
+        remaining_sequences = generate_sequences_from_actions_per_timestep(actions_per_timestep[2:end])
+        
+        # Combine current actions with remaining sequences
+        for action in current_actions
+            for remaining_seq in remaining_sequences
+                new_seq = [action; remaining_seq]
                 push!(sequences, new_seq)
             end
         end
@@ -101,8 +156,8 @@ function evaluate_action_sequence(env, belief, agent, sequence::Vector{SensingAc
         # Get other agents' actions for this step (deterministic)
         other_actions = get_other_actions(other_scripts, k)
         
-        # Calculate expected information gain considering other agents' actions and belief evolution
-        gain = calculate_expected_information_gain_with_other_agents(B, action, other_actions, env)
+        # Calculate expected information gain considering agent's position at timestep k-1
+        gain = calculate_expected_information_gain_at_time(B, action, other_actions, env, agent, k-1)
         
         # Accumulate discounted reward
         value += (γ)^(k-1) * gain
@@ -146,6 +201,8 @@ function get_available_actions(agent, env)
     
     return actions
 end
+
+
 
 """
 Get other agents' actions for a given time step
@@ -203,13 +260,53 @@ function calculate_expected_information_gain_with_other_agents(belief, action::S
 end
 
 """
+Calculate expected information gain considering agent's position at a specific timestep
+"""
+function calculate_expected_information_gain_at_time(belief, action::SensingAction, other_actions::Vector{SensingAction}, env, agent, timestep_offset::Int)
+    if isempty(action.target_cells)
+        return 0.0  # Wait action
+    end
+    
+    # Get agent's position at this timestep
+    agent_pos = get_agent_position_at_time(agent, env, timestep_offset)
+    
+    # Get the Field of Regard at this position
+    for_cells = get_field_of_regard_at_position(agent, agent_pos, env)
+    
+    # Calculate expected information gain for each sensed cell
+    information_gain = 0.0
+    
+    for cell in action.target_cells
+        x, y = cell
+        if 1 <= x <= env.width && 1 <= y <= env.height
+            # Check if cell is actually observable from this position
+            if cell in for_cells
+                # Calculate expected information gain for this cell considering other agents
+                cell_information_gain = calculate_cell_information_gain_with_other_agents(
+                    belief, cell, other_actions, env
+                )
+                information_gain += cell_information_gain
+            else
+                # Cell is not observable from this position, no information gain
+                information_gain += 0.0
+            end
+        end
+    end
+    
+    # Subtract observation cost: c_obs * number of non-wait actions
+    observation_cost = 0.1 * length(action.target_cells)  # Cost per cell sensed
+    
+    return information_gain - observation_cost
+end
+
+"""
 Calculate information gain for a cell considering other agents' actions
 """
 function calculate_cell_information_gain_with_other_agents(belief, cell::Tuple{Int, Int}, other_actions::Vector{SensingAction}, env)
     x, y = cell
     
-    # Get current belief for this cell
-    current_belief_prob = belief.event_probabilities[y, x]
+    # Get current belief distribution for this cell
+    current_belief_dist = belief.event_distributions[:, y, x]
     
     # Check if other agents are observing this cell in the current step
     num_agents_observing = 1  # Count ourselves
@@ -220,7 +317,7 @@ function calculate_cell_information_gain_with_other_agents(belief, cell::Tuple{I
     end
     
     # Calculate information gain for this cell
-    cell_information_gain = calculate_cell_information_gain(current_belief_prob)
+    cell_information_gain = calculate_cell_information_gain(current_belief_dist)
     
     # If multiple agents are observing, share the information gain
     if num_agents_observing > 1
@@ -233,12 +330,19 @@ end
 """
 Calculate information gain for a single cell: G(b_k) = H(b_k) * P(event)
 """
-function calculate_cell_information_gain(probability::Float64)
-    # Calculate entropy: H(b_k) = -b_k * log(b_k) - (1-b_k) * log(1-b_k)
-    entropy = calculate_entropy(probability)
+function calculate_cell_information_gain(prob_vector::Vector{Float64})
+    # Calculate entropy: H(b_k) = -∑ p_i * log(p_i)
+    entropy = calculate_entropy_from_distribution(prob_vector)
     
     # Weight by event probability: G(b_k) = H(b_k) * P(event)
-    return entropy * probability
+    # P(event) is the sum of all event state probabilities (states 2 and beyond)
+    if length(prob_vector) >= 2
+        event_probability = sum(prob_vector[2:end])
+    else
+        event_probability = 0.0
+    end
+    
+    return entropy * event_probability
 end
 
 """
@@ -257,8 +361,8 @@ function simulate_step_with_other_agents(belief, other_actions::Vector{SensingAc
             for cell in other_action.target_cells
                 x, y = cell
                 if 1 <= x <= env.width && 1 <= y <= env.height
-                    # Get current belief for this cell
-                    current_prob = updated_belief.event_probabilities[y, x]
+                    # Get current belief distribution for this cell
+                    current_dist = updated_belief.event_distributions[:, y, x]
                     
                     # Simulate observation (perfect observation model)
                     # In a more sophisticated model, this would be probabilistic
@@ -266,15 +370,16 @@ function simulate_step_with_other_agents(belief, other_actions::Vector{SensingAc
                     # This is a simplified approach - in reality, we'd need to consider
                     # the actual observation model and update accordingly
                     
-                    # Simple update: if probability is high, assume event was observed
-                    # if probability is low, assume no event was observed
-                    if current_prob > 0.5
-                        # Likely event present, observation would confirm it
-                        updated_belief.event_probabilities[y, x] = 0.9
-                    else
-                        # Likely no event, observation would confirm it
-                        updated_belief.event_probabilities[y, x] = 0.1
-                    end
+                    # Simple update: find most likely state and update accordingly
+                    most_likely_state_idx = argmax(current_dist)
+                    
+                    # Create a more certain distribution around the most likely state
+                    new_dist = fill(0.1, length(current_dist))
+                    new_dist[most_likely_state_idx] = 0.7
+                    
+                    # Normalize
+                    new_dist ./= sum(new_dist)
+                    updated_belief.event_distributions[:, y, x] = new_dist
                 end
             end
         end
@@ -284,7 +389,21 @@ function simulate_step_with_other_agents(belief, other_actions::Vector{SensingAc
 end
 
 """
-Calculate entropy for a binary belief state (event vs no event)
+Calculate entropy for a multi-state belief distribution
+H(b_k) = -∑ p_i * log(p_i)
+"""
+function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
+    entropy = 0.0
+    for prob in prob_vector
+        if prob > 0.0
+            entropy -= prob * log(prob)
+        end
+    end
+    return entropy
+end
+
+"""
+Calculate entropy for a binary belief state (event vs no event) - Legacy function
 H(b_k) = -b_k * log(b_k) - (1-b_k) * log(1-b_k)
 """
 function calculate_entropy(probability::Float64)
@@ -340,21 +459,8 @@ end
 Get field of view for an agent at a position
 """
 function get_field_of_regard(agent, position, env)
-    # For now, return a simple FOV
-    # In a full implementation, this would use the agent's sensor model
-    x, y = position
-    fov_cells = Tuple{Int, Int}[]
-    
-    for dx in -1:1
-        for dy in -1:1
-            nx, ny = x + dx, y + dy
-            if 1 <= nx <= env.width && 1 <= ny <= env.height
-                push!(fov_cells, (nx, ny))
-            end
-        end
-    end
-    
-    return fov_cells
+    # Use the same logic as get_field_of_regard_at_position for consistency
+    return get_field_of_regard_at_position(agent, position, env)
 end
 
 
@@ -376,6 +482,60 @@ function combinations(elements, k)
         end
         return result
     end
+end
+
+"""
+Get agent's position at a specific future timestep
+"""
+function get_agent_position_at_time(agent, env, timestep_offset::Int)
+    # Calculate position at future timestep using trajectory and phase offset
+    t = get_current_time(env, agent) + timestep_offset
+    
+    # Apply phase offset
+    adjusted_time = t + agent.phase_offset
+    
+    # Calculate position based on trajectory type
+    if typeof(agent.trajectory) <: CircularTrajectory
+        angle = 2π * (adjusted_time % agent.trajectory.period) / agent.trajectory.period
+        x = agent.trajectory.center_x + round(Int, agent.trajectory.radius * cos(angle))
+        y = agent.trajectory.center_y + round(Int, agent.trajectory.radius * sin(angle))
+        return (x, y)
+    elseif typeof(agent.trajectory) <: LinearTrajectory
+        t_normalized = (adjusted_time % agent.trajectory.period) / agent.trajectory.period
+        x = round(Int, agent.trajectory.start_x + t_normalized * (agent.trajectory.end_x - agent.trajectory.start_x))
+        y = round(Int, agent.trajectory.start_y + t_normalized * (agent.trajectory.end_y - agent.trajectory.start_y))
+        return (x, y)
+    else
+        return (1, 1)  # fallback
+    end
+end
+
+"""
+Get field of regard for an agent at a specific position
+"""
+function get_field_of_regard_at_position(agent, position, env)
+    # For now, return a simple FOR based on sensor range
+    # In a full implementation, this would use the agent's sensor model
+    x, y = position
+    fov_cells = Tuple{Int, Int}[]
+    
+    # Use sensor range to determine FOR
+    sensor_range = round(Int, agent.sensor.range)
+    
+    for dx in -sensor_range:sensor_range
+        for dy in -sensor_range:sensor_range
+            nx, ny = x + dx, y + dy
+            if 1 <= nx <= env.width && 1 <= ny <= env.height
+                # Check if within sensor range
+                distance = sqrt(dx^2 + dy^2)
+                if distance <= agent.sensor.range
+                    push!(fov_cells, (nx, ny))
+                end
+            end
+        end
+    end
+    
+    return fov_cells
 end
 
 end # module 

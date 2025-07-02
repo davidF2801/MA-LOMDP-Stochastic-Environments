@@ -152,9 +152,17 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
     
     if plan_type == :script
         # Execute macro-script (open-loop)
-        # For now, just return the first action in the script
         if !isempty(plan)
-            return plan[1]
+            # Get the action at the current plan index
+            if agent.plan_index <= length(plan)
+                action = plan[agent.plan_index]
+                # Increment plan index for next execution
+                agent.plan_index += 1
+                return action
+            else
+                # Plan exhausted, use wait action
+                return SensingAction(agent_id, Tuple{Int, Int}[], false)
+            end
         else
             # Script empty, use wait action
             return SensingAction(agent_id, Tuple{Int, Int}[], false)

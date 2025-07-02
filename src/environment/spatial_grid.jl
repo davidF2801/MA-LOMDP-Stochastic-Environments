@@ -3,6 +3,7 @@ using POMDPTools
 using Distributions
 using Random
 using LinearAlgebra
+using Infiltrator
 using ..Types
 
 # Import types from the parent module
@@ -13,6 +14,8 @@ import ..Types.EventDynamics, ..Types.TwoStateEventDynamics, ..Types.Determinist
 
 # Import belief management types from Types module
 import ..Types.Belief
+# Import belief management functions
+import ..Agents.BeliefManagement: update_belief_with_observation, predict_belief_evolution_dbn
 
 """
 GridState - Represents the state of the spatial grid
@@ -91,14 +94,32 @@ function get_trajectory_period(trajectory::LinearTrajectory)
 end
 
 """
-initialize_belief(grid_width::Int, grid_height::Int, prior_probability::Float64=0.5)
-Initializes belief state with uniform prior
+initialize_belief(grid_width::Int, grid_height::Int, num_states::Int=2, prior_probability::Float64=0.5)
+Initializes belief state with uniform prior for multi-state distributions
 """
-function initialize_belief(grid_width::Int, grid_height::Int, prior_probability::Float64=0.5)
-    event_probabilities = fill(prior_probability, grid_height, grid_width)
-    uncertainty_map = calculate_uncertainty_map(event_probabilities)
+function initialize_belief(grid_width::Int, grid_height::Int, num_states::Int=2, prior_probability::Float64=0.5)
+    # Create uniform distribution over states
+    event_distributions = Array{Float64, 3}(undef, num_states, grid_height, grid_width)
     
-    return Belief(event_probabilities, uncertainty_map, 0, [])
+    for y in 1:grid_height
+        for x in 1:grid_width
+            # Uniform distribution: equal probability for all states
+            for state in 1:num_states
+                event_distributions[state, y, x] = 1.0 / num_states
+            end
+        end
+    end
+    
+    # Calculate uncertainty map (entropy of distributions)
+    uncertainty_map = Matrix{Float64}(undef, grid_height, grid_width)
+    for y in 1:grid_height
+        for x in 1:grid_width
+            prob_vector = event_distributions[:, y, x]
+            uncertainty_map[y, x] = calculate_entropy_from_distribution(prob_vector)
+        end
+    end
+    
+    return Belief(event_distributions, uncertainty_map, 0, [])
 end
 
 """
@@ -217,8 +238,8 @@ function POMDPs.initialstate(pomdp::SpatialGrid)
         
         # Initialize agent's belief if not already initialized
         if !isdefined(agent, :belief) || (agent.belief isa Array && isempty(agent.belief)) || (agent.belief isa Belief && agent.belief.last_update == -1)
-            # Initialize belief with uniform prior
-            agent.belief = initialize_belief(pomdp.width, pomdp.height, 0.5)
+            # Initialize belief with uniform prior for 2-state system
+            agent.belief = initialize_belief(pomdp.width, pomdp.height, 2, 0.5)
         end
     end
     
@@ -260,7 +281,34 @@ Updates the agent's belief state after an observation
 """
 function update_agent_belief!(agent::Agent, action::SensingAction, observation::GridObservation, env::SpatialGrid)
     # Update agent's belief using the belief management module
-    agent.belief = update_belief_state(agent.belief, action, observation, env.event_dynamics)
+    # This will be handled by the belief management module with proper DBN evolution
+    if agent.belief !== nothing
+        # First, evolve unobserved cells using DBN
+        evolved_belief = predict_belief_evolution_dbn(agent.belief, env.event_dynamics, 1)
+        
+        # Then update observed cells with perfect observations
+        for (i, cell) in enumerate(observation.sensed_cells)
+            x, y = cell
+            if 1 <= x <= env.width && 1 <= y <= env.height
+                # Get observed state
+                observed_state = observation.event_states[i]
+                
+                # Update belief for this cell with perfect observation
+                if observed_state == EVENT_PRESENT
+                    # Set to certain event present
+                    evolved_belief.event_distributions[2, y, x] = 1.0  # EVENT_PRESENT
+                    evolved_belief.event_distributions[1, y, x] = 0.0  # NO_EVENT
+                else
+                    # Set to certain no event
+                    evolved_belief.event_distributions[1, y, x] = 1.0  # NO_EVENT
+                    evolved_belief.event_distributions[2, y, x] = 0.0  # EVENT_PRESENT
+                end
+            end
+        end
+        
+        # Update agent's belief
+        agent.belief = evolved_belief
+    end
 end
 
 """
@@ -313,7 +361,14 @@ function POMDPs.reward(pomdp::SpatialGrid, s::GridState, a::SensingAction, sp::G
     agent_pos = s.agent_positions[a.agent_id]
     
     # Use agent's belief instead of hardcoded uniform prior
-    belief = agent.belief.event_probabilities
+    # Convert belief distributions to event probabilities for reward calculation
+    belief = Matrix{Float64}(undef, env.height, env.width)
+    for y in 1:env.height
+        for x in 1:env.width
+            # Get probability of event present (state 2) from belief distribution
+            belief[y, x] = agent.belief.event_distributions[2, y, x]
+        end
+    end
     
     # Get observation
     sensed_cells, event_states = generate_observation(
@@ -525,6 +580,20 @@ function calculate_entropy(probability::Float64)
 end
 
 """
+calculate_entropy_from_distribution(prob_vector::Vector{Float64})
+Calculates entropy for a multi-state probability distribution
+"""
+function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
+    entropy = 0.0
+    for prob in prob_vector
+        if prob > 0.0
+            entropy -= prob * log(prob)
+        end
+    end
+    return entropy
+end
+
+"""
 calculate_posterior_probability(prior_prob::Float64, observed_state::EventState)
 Calculates posterior probability given observation without modifying the original belief
 """
@@ -644,8 +713,8 @@ create_agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, grid_w
 Creates an agent with properly initialized belief state
 """
 function create_agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, grid_width::Int, grid_height::Int)
-    # Initialize belief with uniform prior
-    belief = initialize_belief(grid_width, grid_height, 0.5)
+    # Initialize belief with uniform prior for 2-state system
+    belief = initialize_belief(grid_width, grid_height, 2, 0.5)
     
     return Agent(id, trajectory, sensor, 0, belief)
 end 

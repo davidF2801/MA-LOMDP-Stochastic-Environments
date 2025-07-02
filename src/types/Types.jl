@@ -134,15 +134,15 @@ const Deterministic = DeterministicDistribution
 Belief - Represents a belief state over the environment
 """
 mutable struct Belief
-    event_probabilities::Matrix{Float64}  # Probability of events at each cell
-    uncertainty_map::Matrix{Float64}      # Uncertainty at each cell
-    last_update::Int                      # Last update time step
+    event_distributions::Array{Float64, 3}  # Distribution over event states at each cell [state, y, x]
+    uncertainty_map::Matrix{Float64}        # Uncertainty at each cell
+    last_update::Int                        # Last update time step
     history::Vector{Tuple{SensingAction, GridObservation}}
 end
 
 # Add copy method for Belief
 Base.copy(belief::Belief) = Belief(
-    copy(belief.event_probabilities),
+    copy(belief.event_distributions),
     copy(belief.uncertainty_map),
     belief.last_update,
     copy(belief.history)
@@ -150,11 +150,59 @@ Base.copy(belief::Belief) = Belief(
 
 # Add deepcopy method for Belief
 Base.deepcopy(belief::Belief) = Belief(
-    deepcopy(belief.event_probabilities),
+    deepcopy(belief.event_distributions),
     deepcopy(belief.uncertainty_map),
     belief.last_update,
     deepcopy(belief.history)
 )
+
+# Helper functions for working with belief distributions
+"""
+get_event_probability(belief::Belief, x::Int, y::Int, state::EventState)
+Get probability of a specific event state at a cell
+"""
+function get_event_probability(belief::Belief, x::Int, y::Int, state::EventState)
+    state_idx = Int(state) + 1  # Convert enum to 1-based index
+    return belief.event_distributions[state_idx, y, x]
+end
+
+"""
+set_event_probability!(belief::Belief, x::Int, y::Int, state::EventState, prob::Float64)
+Set probability of a specific event state at a cell
+"""
+function set_event_probability!(belief::Belief, x::Int, y::Int, state::EventState, prob::Float64)
+    state_idx = Int(state) + 1  # Convert enum to 1-based index
+    belief.event_distributions[state_idx, y, x] = prob
+end
+
+"""
+get_event_probability_vector(belief::Belief, x::Int, y::Int)
+Get the full probability distribution vector for a cell
+"""
+function get_event_probability_vector(belief::Belief, x::Int, y::Int)
+    return belief.event_distributions[:, y, x]
+end
+
+"""
+set_event_probability_vector!(belief::Belief, x::Int, y::Int, prob_vector::Vector{Float64})
+Set the full probability distribution vector for a cell
+"""
+function set_event_probability_vector!(belief::Belief, x::Int, y::Int, prob_vector::Vector{Float64})
+    belief.event_distributions[:, y, x] = prob_vector
+end
+
+"""
+normalize_cell_distribution!(belief::Belief, x::Int, y::Int)
+Normalize the probability distribution for a cell to sum to 1
+"""
+function normalize_cell_distribution!(belief::Belief, x::Int, y::Int)
+    prob_vector = get_event_probability_vector(belief, x, y)
+    total = sum(prob_vector)
+    if total > 0
+        normalized_vector = prob_vector ./ total
+        set_event_probability_vector!(belief, x, y, normalized_vector)
+    end
+end
 
 """
 Agent - Represents an autonomous agent in the multi-agent system
@@ -166,16 +214,17 @@ mutable struct Agent
     phase_offset::Int                 # Phase offset for trajectory timing
     belief::Any                       # Local belief state (Belief type from BeliefManagement)
     observation_history::Vector{GridObservation}  # History of observations
+    plan_index::Int                   # Index of next action to execute in current plan
 end
 
-# Constructor with default observation history
+# Constructor with default observation history and plan index
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, belief::Any)
-    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[])
+    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1)
 end
 
-# Constructor with default belief and observation history
+# Constructor with default belief, observation history, and plan index
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int)
-    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[])
+    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1)
 end
 
 # Export all types
@@ -188,5 +237,8 @@ export EventDynamics, TwoStateEventDynamics
 export DeterministicDistribution, Deterministic
 export Belief
 export Agent
+
+# Export helper functions
+export get_event_probability, set_event_probability!, get_event_probability_vector, set_event_probability_vector!, normalize_cell_distribution!
 
 end # module Types 

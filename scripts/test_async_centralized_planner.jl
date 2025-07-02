@@ -19,6 +19,8 @@ println("✅ Random loaded")
 using Plots
 Plots.plotlyjs()  # Use PlotlyJS backend for emoji support
 println("✅ Using PlotlyJS backend for emoji support.")
+using Infiltrator
+println("✅ Infiltrator loaded")
 
 # Set random seed for reproducibility
 Random.seed!(42)
@@ -40,7 +42,7 @@ println("✅ Random seed set")
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 100                  # Total simulation steps
+const NUM_STEPS = 20                  # Total simulation steps
 const COMPARISON_STEPS = 3000         # Steps for planning mode comparison
 const CONTACT_FREQUENCY_STEPS = 25    # Steps for contact frequency analysis
 const PLANNING_MODE = :script         # :script or :policy
@@ -52,6 +54,7 @@ const INITIAL_EVENTS = 2             # Number of initial events
 const MAX_SENSING_TARGETS = 1         # Maximum cells an agent can sense per step
 const SENSOR_RANGE = 1.5              # Sensor range for agents
 const DISCOUNT_FACTOR = 0.95          # POMDP discount factor
+const NUM_EVENT_STATES = 2            # Number of event states (2 for NO_EVENT/EVENT_PRESENT, 4 for full model)
 
 # 📊 EVENT DYNAMICS PARAMETERS
 const BIRTH_RATE = 0.01            # Rate of new events appearing
@@ -519,7 +522,7 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
     agents = env.agents
     
     # Initialize ground station
-    gs_state = GroundStation.initialize_ground_station(env, agents)
+    gs_state = GroundStation.initialize_ground_station(env, agents, num_states=NUM_EVENT_STATES)
     
     # Ground station position
     ground_station_pos = (GROUND_STATION_X, GROUND_STATION_Y)  # Position where agents sync
@@ -536,13 +539,10 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
     environment_evolution = Matrix{EventState}[]
     action_history = Vector{Vector{SensingAction}}()
     
-    # Get initial environment state
-    initial_state = POMDPs.initialstate(env)
-    if hasproperty(initial_state, :value)
-        current_environment = initial_state.value.event_map
-    else
-        current_environment = initial_state.event_map
-    end
+    # Get initial environment state using POMDP interface
+    initial_state_dist = POMDPs.initialstate(env)
+    current_state = rand(initial_state_dist)  # Sample initial state
+    current_environment = current_state.event_map
     
     println("\n📊 Starting simulation...")
     
@@ -569,6 +569,7 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
             # Get plan from ground station and execute it
             plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
             action = execute_plan(agent, plan, plan_type, agent.observation_history)
+            @infiltrate
             push!(joint_actions, action)
             
             # Calculate reward for this agent
@@ -579,30 +580,22 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
                 step_reward += agent_reward
             end
             
-            # Simulate observation based on current environment state
-            event_states = EventState[]
-            for cell in action.target_cells
-                x, y = cell
-                if 1 <= x <= env.width && 1 <= y <= env.height
-                    # Get the actual event state from the environment
-                    event_state = current_environment[y, x]
-                    push!(event_states, event_state)
-                else
-                    # Cell out of bounds, assume no event
-                    push!(event_states, NO_EVENT)
-                end
-            end
-            
-            observation = GridObservation(agent.id, action.target_cells, event_states, [])
-            push!(agent.observation_history, observation)
-            
-            # Debug: print what was observed
-            if !isempty(event_states)
-                events_found = count(==(EVENT_PRESENT), event_states)
+            # Use POMDP interface to get observations
+            if !isempty(action.target_cells)
+                # Get observation using POMDP observation model
+                observation_dist = POMDPs.observation(env, action, current_state)
+                observation = rand(observation_dist)
+                push!(agent.observation_history, observation)
+                
+                # Debug: print what was observed
+                events_found = count(==(EVENT_PRESENT), observation.event_states)
                 println("  Agent $(agent.id): $(length(action.target_cells)) cells sensed, $(events_found) events found")
             else
-                println("  Agent $(agent.id): $(length(action.target_cells)) cells sensed")
+                # Wait action - no observation
+                println("  Agent $(agent.id): wait action")
             end
+            
+
         end
         
         # Record environment state and actions for visualization
@@ -611,28 +604,18 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
         
         total_reward += step_reward
         
-        # Update environment using existing event dynamics
+        # Update environment using POMDP transition model
         if t < num_steps - 1  # Don't update on last step
-            # Convert to DBN model for environment update
-            dbn_model = DBNTransitionModel2(env.event_dynamics)
+            # Create a dummy action for environment transition (no agent action affects environment)
+            dummy_action = SensingAction(1, [], false)
             
-            # Convert EventState to EventState2 for DBN update
-            event_map_2 = Matrix{EventState2}(undef, env.height, env.width)
-            for y in 1:env.height
-                for x in 1:env.width
-                    event_map_2[y, x] = current_environment[y, x] == EVENT_PRESENT ? EVENT_PRESENT_2 : NO_EVENT_2
-                end
-            end
-            
-            # Update environment
-            EventDynamicsModule.update_events!(dbn_model, event_map_2, Random.GLOBAL_RNG)
-            
-            # Convert back to EventState
-            for y in 1:env.height
-                for x in 1:env.width
-                    current_environment[y, x] = event_map_2[y, x] == EVENT_PRESENT_2 ? EVENT_PRESENT : NO_EVENT
-                end
-            end
+            # Get next state using POMDP transition model
+            next_state_dist = POMDPs.transition(env, current_state, dummy_action)
+            println("next_state_dist: $(next_state_dist)")
+            current_state = rand(next_state_dist)
+            current_environment = current_state.event_map
+            @infiltrate  # <-- This will drop you into the Infiltrator REPL
+
         end
         
         # Print ground station status every STATUS_UPDATE_INTERVAL steps
