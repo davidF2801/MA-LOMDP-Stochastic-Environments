@@ -18,15 +18,11 @@ We formalize the environment as a **Multi-Agent Locally Observable Markov Decisi
 * **Periodic Trajectories**: Agents follow deterministic, recurring routes; actions are restricted to footprint regions.
 * **Spatiotemporal Dynamics**: Events evolve stochastically in time and space, possibly with local contagion models.
 * **Partial Observability**: Sensing is limited to local footprints; full state is never known.
-* **Communication Models**:
-  * Centralized: Continuous or periodic uplink to a global planner.
-  * Decentralized: Peer-to-peer sharing with belief fusion.
-  * Hybrid: Agents sync asynchronously with a ground station to update their policy.
 * **Advanced Information Gain**: Sophisticated expected information gain calculation considering other agents' future observations and proper timing.
 
 ### Goal
 
-The primary objective is to design **planning and coordination strategies** that maximize the long-term value of the information gathered. This includes maximizing the number of events detected, minimizing detection latency, and promoting persistent tracking. The framework supports **centralized**, **decentralized**, and **asynchronous hybrid** planning modes, allowing trade-offs between performance, scalability, and communication cost.
+The primary objective is to design **planning and coordination strategies** that maximize the long-term value of the information gathered. This includes maximizing the number of events detected, minimizing detection latency, and promoting persistent tracking. The framework supports **asynchronous and synchronous** centralized planning modes, allowing trade-offs between performance, scalability, and communication cost.
 
 ### Applications
 
@@ -85,16 +81,16 @@ This framework is applicable to:
 - **SpatialGrid**: 2D discretized environment with stochastic event dynamics
 - **EventDynamics**: Markov chain and spatial contagion models for event evolution
 - **DBNTransitionModel**: Dynamic Bayesian Network for proper belief evolution
-- **SensorModels**: Range-limited sensor footprints and observation models
+- **SensorModels**: Range-limited sensor footprints
 
 ### Agents
 - **TrajectoryPlanner**: Deterministic periodic trajectory management with phase offsets
 - **SensingPolicy**: Decision-making for where to sense within footprint
-- **Communication**: Coordination strategies (centralized/decentralized/hybrid)
-- **BeliefManagement**: Local belief state estimation and fusion with 3D distributions
+- **Communication**: In case we want to implement some communication realism in the future
+- **BeliefManagement**: Local belief state estimation and fusion
 
 ### Planners
-- **MacroPlannerAsync**: Asynchronous centralized planning with decentralized execution
+- **MacroPlannerAsync**: Asynchronous centralized planning with decentralized execution, open loop
 - **MacroPlannerSync**: Synchronous centralized planning
 - **PolicyTreePlanner**: Closed-loop policy tree planning
 - **GroundStation**: Central coordination and plan management
@@ -107,16 +103,11 @@ This framework is applicable to:
 - **POMDP Interface**: Full POMDPs.jl interface implementation
 - **Trajectory Management**: Circular and linear periodic trajectory implementations with phase offsets
 - **Sensor Models**: Range-limited sensor footprint calculations
-- **Event Dynamics**: Stochastic event evolution framework with DBN models
+- **Event Dynamics**: Stochastic event evolution framework with spatial contagion
 - **Belief Management**: 3D belief state structure and DBN-based evolution
 - **Communication Protocols**: Centralized, decentralized, and hybrid communication models
 - **Sensing Policies**: Information gain, random, and greedy sensing strategies
 - **Asynchronous Planning**: Ground station coordination with periodic synchronization
-- **Advanced Information Gain**: Sophisticated expected information gain calculation considering:
-  - Other agents' scheduled observations
-  - Proper global timeline conversion with phase offsets
-  - Belief evolution between observations
-  - Observation outcome probability weighting
 - **Visualization**: Agent trajectories, environment evolution, and action statistics
 
 ### 🔄 In Progress
@@ -145,25 +136,6 @@ Pkg.activate(".")
 Pkg.instantiate()
 ```
 
-## Usage
-
-### Running the Asynchronous Centralized Planning Simulation
-
-```julia
-# Run the main asynchronous simulation
-include("scripts/test_async_centralized_planner.jl")
-
-# Or run a quick test
-simple_test(20, :script)  # 20 steps with macro-script planning
-quick_test(10)            # 10 steps with default settings
-```
-
-### Creating Visualizations
-
-```julia
-# Plot results (requires plotting packages)
-include("scripts/plot_results.jl")
-```
 
 ### Configuration
 
@@ -228,31 +200,6 @@ This project demonstrates several key POMDPs.jl concepts:
 - `discount(pomdp)`: Discount factor for long-term planning
 - `isterminal(pomdp, s)`: Terminal state conditions
 
-## Example: Creating a MA-LOMDP
-
-```julia
-using MyProject
-using POMDPs
-using POMDPTools
-
-# Create environment with stochastic event dynamics
-event_dynamics = EventDynamics(0.01, 0.03, 0.01, 0.03, 0.02)
-env = SpatialGrid(5, 5, event_dynamics, agents, 1.5, 0.95, 2, 1, (3, 1))
-
-# Create agents with periodic trajectories and phase offsets
-agents = [
-    Agent(1, LinearTrajectory(3, 1, 3, 5, 5), RangeLimitedSensor(1.5, π/2, 0.1), 0),
-    Agent(2, LinearTrajectory(3, 1, 3, 5, 5), RangeLimitedSensor(1.5, π/2, 0.1), 3)
-]
-
-# Initialize ground station
-gs_state = GroundStation.initialize_ground_station(env, agents, num_states=2)
-
-# Run asynchronous simulation
-gs_state, agents, reward, sync_events, agent_rewards, env_evolution, action_history = 
-    simulate_async_centralized_planning(20, planning_mode=:script)
-```
-
 ## Dependencies
 
 - **POMDPs.jl**: Core POMDP interface
@@ -266,17 +213,6 @@ gs_state, agents, reward, sync_events, agent_rewards, env_evolution, action_hist
 - **Plots**: Visualization
 - **Infiltrator**: Debugging
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Implement your changes
-4. Add tests
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## References
 
