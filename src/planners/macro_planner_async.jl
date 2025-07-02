@@ -4,6 +4,7 @@ using POMDPs
 using POMDPTools
 using Random
 using LinearAlgebra
+using Infiltrator
 using ..Types
 import ..Agents.BeliefManagement: sample_from_belief
 # Import types from the parent module (Planners)
@@ -21,7 +22,7 @@ import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefMa
 export best_script
 
 """
-best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts)::Vector{SensingAction}
+best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state)::Vector{SensingAction}
   – Enumerate every |A|^C open-loop action sequence for `agent`.
   – For each sequence:
         • Roll out C steps:  (simulate using env.transition & env.observation)
@@ -31,7 +32,7 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts)::Vector{Se
         • For other agents use `other_scripts[k]` (deterministic vector passed in)
   – Return argmax sequence (ties → first).
 """
-function best_script(env, belief::Belief, agent, C::Int, other_scripts; rng::AbstractRNG=Random.GLOBAL_RNG)
+function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG)
     # Enumerate all possible action sequences of length C considering trajectory
     action_sequences = generate_action_sequences(agent, env, C)
     
@@ -46,7 +47,7 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts; rng::Abs
     
     for (i, sequence) in enumerate(action_sequences)
         # Evaluate this sequence
-        value = evaluate_action_sequence(env, belief, agent, sequence, other_scripts, C, rng)
+        value = evaluate_action_sequence(env, belief, agent, sequence, other_scripts, C, gs_state, rng)
         
         if value > best_value
             best_value = value
@@ -144,7 +145,7 @@ end
 """
 Evaluate a single action sequence using deterministic open-loop macro-script evaluation
 """
-function evaluate_action_sequence(env, belief, agent, sequence::Vector{SensingAction}, other_scripts, C::Int, rng::AbstractRNG)
+function evaluate_action_sequence(env, belief, agent, sequence::Vector{SensingAction}, other_scripts, C::Int, gs_state, rng::AbstractRNG)
     γ = env.discount  # Use environment discount factor
     value = 0.0
     B = deepcopy(belief)  # Copy belief for deterministic evolution
@@ -157,7 +158,7 @@ function evaluate_action_sequence(env, belief, agent, sequence::Vector{SensingAc
         other_actions = get_other_actions(other_scripts, k)
         
         # Calculate expected information gain considering agent's position at timestep k-1
-        gain = calculate_expected_information_gain_at_time(B, action, other_actions, env, agent, k-1)
+        gain = calculate_expected_information_gain_at_time(B, action, other_actions, env, agent, k-1, gs_state, sequence)
         
         # Accumulate discounted reward
         value += (γ)^(k-1) * gain
@@ -231,44 +232,44 @@ end
 
 
 
-"""
-Calculate expected information gain considering other agents' actions and observations
-"""
-function calculate_expected_information_gain_with_other_agents(belief, action::SensingAction, other_actions::Vector{SensingAction}, env)
-    if isempty(action.target_cells)
-        return 0.0  # Wait action
-    end
+# """
+# Calculate expected information gain considering other agents' actions and observations
+# """
+# function calculate_expected_information_gain_with_other_agents(belief, action::SensingAction, other_actions::Vector{SensingAction}, env)
+#     if isempty(action.target_cells)
+#         return 0.0  # Wait action
+#     end
     
-    # Calculate expected information gain for each sensed cell
-    information_gain = 0.0
+#     # Calculate expected information gain for each sensed cell
+#     information_gain = 0.0
     
-    for cell in action.target_cells
-        x, y = cell
-        if 1 <= x <= env.width && 1 <= y <= env.height
-            # Calculate expected information gain for this cell considering other agents
-            cell_information_gain = calculate_cell_information_gain_with_other_agents(
-                belief, cell, other_actions, env
-            )
-            information_gain += cell_information_gain
-        end
-    end
+#     for cell in action.target_cells
+#         x, y = cell
+#         if 1 <= x <= env.width && 1 <= y <= env.height
+#             # Calculate expected information gain for this cell considering other agents
+#             cell_information_gain = calculate_cell_information_gain_with_other_agents(
+#                 belief, cell, other_actions, env, 1, 0, 0, gs_state  # agent_id=1, current_timestep=0, evaluation_timestep=0, gs_state for current step
+#             )
+#             information_gain += cell_information_gain
+#         end
+#     end
     
-    # Subtract observation cost: c_obs * number of non-wait actions
-    observation_cost = 0.1 * length(action.target_cells)  # Cost per cell sensed
+#     # Subtract observation cost: c_obs * number of non-wait actions
+#     observation_cost = 0.1 * length(action.target_cells)  # Cost per cell sensed
     
-    return information_gain - observation_cost
-end
+#     return information_gain - observation_cost
+# end
 
 """
 Calculate expected information gain considering agent's position at a specific timestep
 """
-function calculate_expected_information_gain_at_time(belief, action::SensingAction, other_actions::Vector{SensingAction}, env, agent, timestep_offset::Int)
+function calculate_expected_information_gain_at_time(belief, action::SensingAction, other_actions::Vector{SensingAction}, env, agent, phase::Int, gs_state, sequence)
     if isempty(action.target_cells)
         return 0.0  # Wait action
     end
     
     # Get agent's position at this timestep
-    agent_pos = get_agent_position_at_time(agent, env, timestep_offset)
+    agent_pos = get_agent_position_at_time(agent, env, phase)
     
     # Get the Field of Regard at this position
     for_cells = get_field_of_regard_at_position(agent, agent_pos, env)
@@ -283,7 +284,7 @@ function calculate_expected_information_gain_at_time(belief, action::SensingActi
             if cell in for_cells
                 # Calculate expected information gain for this cell considering other agents
                 cell_information_gain = calculate_cell_information_gain_with_other_agents(
-                    belief, cell, other_actions, env
+                    belief, cell, other_actions, env, agent.id, phase, gs_state, sequence  # agent_id, current_timestep, evaluation_timestep, gs_state
                 )
                 information_gain += cell_information_gain
             else
@@ -300,32 +301,283 @@ function calculate_expected_information_gain_at_time(belief, action::SensingActi
 end
 
 """
-Calculate information gain for a cell considering other agents' actions
+Calculate expected information gain for a cell considering other agents' future observations
+This implements the sophisticated approach that:
+1. Identifies which other agents will observe the cell before our evaluation time
+2. Records the specific times of those observations  
+3. Conditions our estimate on possible observation outcomes
+4. Averages information gains weighted by observation probabilities
 """
-function calculate_cell_information_gain_with_other_agents(belief, cell::Tuple{Int, Int}, other_actions::Vector{SensingAction}, env)
+function calculate_cell_information_gain_with_other_agents(belief, cell::Tuple{Int, Int}, other_actions::Vector{SensingAction}, env, current_agent_id::Int, phase::Int, gs_state, sequence)
     x, y = cell
     
     # Get current belief distribution for this cell
     current_belief_dist = belief.event_distributions[:, y, x]
     
-    # Check if other agents are observing this cell in the current step
-    num_agents_observing = 1  # Count ourselves
-    for other_action in other_actions
-        if other_action !== nothing && cell in other_action.target_cells
-            num_agents_observing += 1
+    # Step 1: Identify which other agents have observed or will observe this cell before evaluation_time
+    # We need to collect ALL scheduled observations of this cell, accounting for phase offsets
+    past_observations = collect_all_scheduled_observations(cell, env, current_agent_id, phase, gs_state, sequence)
+    
+    if isempty(past_observations)
+        # No other agents will observe this cell, use simple information gain
+        return calculate_cell_information_gain(current_belief_dist)
+    end
+    
+    # Step 2: Generate all possible observation outcome sequences
+    observation_outcomes = generate_observation_outcomes(past_observations, current_belief_dist)
+    
+    # Step 3: Calculate expected information gain by averaging over outcomes
+    total_expected_gain = 0.0
+    
+    for (outcome_sequence, outcome_probability) in observation_outcomes
+        # Simulate belief evolution with this outcome sequence
+        evolved_belief_dist = simulate_belief_evolution_with_observations(
+            current_belief_dist, outcome_sequence, past_observations, env, current_agent_id, phase + gs_state.time_step
+        )
+        
+        # Calculate information gain for our observation at evaluation_time
+        cell_information_gain = calculate_cell_information_gain(evolved_belief_dist)
+        
+        # Weight by probability of this outcome sequence
+        total_expected_gain += outcome_probability * cell_information_gain
+    end
+    
+    return total_expected_gain
+end
+
+"""
+Collect ALL scheduled observations of a cell by other agents that happen before the current agent's evaluation time
+Returns a vector of (agent_id, global_timestep) tuples where global_timestep is the global simulation time
+These are observations that have already happened or will happen before the current agent evaluates this cell
+"""
+function collect_all_scheduled_observations(cell::Tuple{Int, Int}, env, current_agent_id::Int, current_agent_timestep::Int, gs_state, sequence)
+    past_observations = Vector{Tuple{Int, Int}}()  # (agent_id, global_timestep)
+    # Check if the current agent has already observed this cell in its own sequence
+    # (up to but not including the current timestep)
+    for (seq_idx, planned_action) in enumerate(sequence)
+        if seq_idx >= current_agent_timestep
+            break  # Stop checking at current timestep (exclusive)
+        end
+        if cell in planned_action.target_cells
+            push!(past_observations, (current_agent_id, gs_state.time_step+seq_idx))
+        end
+    end
+    # Get the current agent to understand its phase offset
+    current_agent = nothing
+    if hasproperty(env, :agents)
+        for agent in env.agents
+            if agent.id == current_agent_id
+                current_agent = agent
+                break
+            end
         end
     end
     
-    # Calculate information gain for this cell
-    cell_information_gain = calculate_cell_information_gain(current_belief_dist)
-    
-    # If multiple agents are observing, share the information gain
-    if num_agents_observing > 1
-        cell_information_gain /= num_agents_observing
+    if current_agent === nothing
+        return past_observations
     end
     
-    return cell_information_gain
+    # Convert current agent's evaluation timestep to global time
+    global_evaluation_time = gs_state.time_step
+    
+    # Check all other agents' planned sequences for observations of this cell
+    # Use the ground station's mapping of agent plans
+    for (other_agent_id, other_agent_plan) in gs_state.agent_plans
+        # Skip the current agent
+        if other_agent_id == current_agent_id
+            continue
+        end
+        
+        # Skip if no plan available
+        if other_agent_plan === nothing
+            continue
+        end
+        
+        # Get the other agent to understand its phase offset
+        other_agent = nothing
+        for agent in env.agents
+            if agent.id == other_agent_id
+                other_agent = agent
+                break
+            end
+        end
+        
+        if other_agent === nothing
+            continue
+        end
+        # Check each timestep in the other agent's planned sequence
+        if gs_state.agent_plan_types[other_agent_id] == :script
+            # For macro-scripts, check each action in the sequence
+            for (seq_idx, planned_action) in enumerate(other_agent_plan)
+                agent_timestep = seq_idx  # This is the agent's own timestep
+                
+                # Convert agent timestep to global timestep
+                # Global timestep = agent_timestep + agent_phase_offset
+                global_timestep_observation = global_evaluation_time - (current_agent.trajectory.period-current_agent.phase_offset+other_agent.phase_offset) + agent_timestep
+
+                if cell in planned_action.target_cells
+                    push!(past_observations, (other_agent_id, global_timestep_observation))
+                end
+                # Check if this observation happens before the current agent's evaluation time in global time
+            end
+        elseif gs_state.agent_plan_types[other_agent_id] == :policy
+            # For policy trees, we can't easily determine future observations
+            # For now, skip policy trees (they're closed-loop anyway)
+            continue
+        end
+    end
+    
+    # Sort by global time to ensure chronological order
+    sort!(past_observations, by = obs -> obs[2])
+    
+    return past_observations
 end
+
+"""
+Generate all possible observation outcome sequences for past observations
+Returns a vector of (outcome_sequence, probability) tuples
+"""
+function generate_observation_outcomes(past_observations::Vector{Tuple{Int, Int}}, current_belief_dist::Vector{Float64})
+    if isempty(past_observations)
+        return [([], 1.0)]
+    end
+    
+    num_states = length(current_belief_dist)
+    
+    # Sort observations by time to process them chronologically
+    sorted_observations = sort(past_observations, by = obs -> obs[2])  # Sort by time
+    
+    # Generate all possible outcome sequences recursively
+    outcomes = generate_outcome_sequences_recursive(sorted_observations, current_belief_dist, 1)
+    
+    return outcomes
+end
+
+"""
+Recursively generate all possible outcome sequences for multiple observations
+"""
+function generate_outcome_sequences_recursive(observations::Vector{Tuple{Int, Int}}, current_belief_dist::Vector{Float64}, obs_idx::Int)
+    if obs_idx > length(observations)
+        return [([], 1.0)]
+    end
+    
+    num_states = length(current_belief_dist)
+    outcomes = Vector{Tuple{Vector{Int}, Float64}}()
+    
+    # For each possible observation outcome (what the agent might observe)
+    # In a 2-state system: 1 = observed NO_EVENT, 2 = observed EVENT_PRESENT
+    for observed_state in 1:num_states
+        # Calculate probability of observing this state given current belief
+        # This is a simplified observation model - in reality it would depend on sensor characteristics
+        if observed_state == 1  # Observed NO_EVENT
+            # Probability of observing NO_EVENT = P(true_state=1) + some noise
+            observation_prob = current_belief_dist[1] * 0.9 + current_belief_dist[2] * 0.1
+        else  # Observed EVENT_PRESENT  
+            # Probability of observing EVENT_PRESENT = P(true_state=2) + some noise
+            observation_prob = current_belief_dist[2] * 0.9 + current_belief_dist[1] * 0.1
+        end
+        
+        if observation_prob > 0.0
+            # Generate outcomes for remaining observations
+            remaining_outcomes = generate_outcome_sequences_recursive(observations, current_belief_dist, obs_idx + 1)
+            
+            for (remaining_sequence, remaining_prob) in remaining_outcomes
+                # Combine this outcome with remaining outcomes
+                full_sequence = [observed_state; remaining_sequence]
+                full_probability = observation_prob * remaining_prob
+                
+                push!(outcomes, (full_sequence, full_probability))
+            end
+        end
+    end
+    
+    return outcomes
+end
+
+"""
+Simulate belief evolution with a sequence of observations
+"""
+function simulate_belief_evolution_with_observations(
+    initial_belief_dist::Vector{Float64}, 
+    outcome_sequence::Vector{Int}, 
+    past_observations::Vector{Tuple{Int, Int}}, 
+    env,
+    current_agent_id::Int,
+    evaluation_timestep::Int
+)
+    # Create a temporary belief object to use existing DBN functions
+    temp_belief = Belief(
+        reshape(initial_belief_dist, :, 1, 1),  # Reshape to 3D array [states, height, width]
+        zeros(1, 1),  # Dummy uncertainty map
+        0,  # Dummy last_update
+        []  # Dummy history
+    )
+    
+    # Get current agent to understand its phase offset
+    current_agent = nothing
+    for agent in env.agents
+        if agent.id == current_agent_id
+            current_agent = agent
+            break
+        end
+    end
+    
+    if current_agent === nothing
+        return initial_belief_dist
+    end
+    
+    # Convert evaluation timestep to global timestep
+    # evaluation_timestep is the agent's own timestep, convert to global
+    global_evaluation_time = evaluation_timestep
+        
+    last_cell_observation_time = past_observations[end][2]
+    
+    # Apply observations in chronological order
+    for (i, observed_state) in enumerate(outcome_sequence)
+        if i <= length(past_observations)
+            
+            # Calculate how many global timesteps have passed since the last observation of this cell
+            timesteps_since_last_cell_observation = global_evaluation_time - last_cell_observation_time
+            
+            # Apply DBN evolution for the timesteps between observations of this cell
+            if timesteps_since_last_cell_observation > 0
+                temp_belief = predict_belief_evolution_dbn(temp_belief, env.event_dynamics, timesteps_since_last_cell_observation)
+            end
+            
+            # Apply observation update based on what was observed
+            # This is a simplified Bayesian update
+            if observed_state == 1  # Observed NO_EVENT
+                # Update belief: increase probability of NO_EVENT, decrease EVENT_PRESENT
+                temp_belief.event_distributions[1, 1, 1] *= 1  # Increase confidence in NO_EVENT
+                temp_belief.event_distributions[2, 1, 1] *= 0  # Decrease confidence in EVENT_PRESENT
+            else  # Observed EVENT_PRESENT
+                # Update belief: increase probability of EVENT_PRESENT, decrease NO_EVENT
+                temp_belief.event_distributions[1, 1, 1] *= 0  # Decrease confidence in NO_EVENT
+                temp_belief.event_distributions[2, 1, 1] *= 1  # Increase confidence in EVENT_PRESENT
+            end
+            
+            # Normalize the distribution
+            total_prob = sum(temp_belief.event_distributions[:, 1, 1])
+            if total_prob > 0.0
+                temp_belief.event_distributions[:, 1, 1] ./= total_prob
+            end
+            
+            # # Update the last observation time for this cell
+            # last_cell_observation_time = global_timestep
+        end
+    end
+    
+    # Finally, apply DBN evolution from the last observation to our evaluation time
+    timesteps_to_evaluation = global_evaluation_time - last_cell_observation_time
+    if timesteps_to_evaluation > 0
+        temp_belief = predict_belief_evolution_dbn(temp_belief, env.event_dynamics, timesteps_to_evaluation)
+    end
+    
+    # Return the final distribution
+    return vec(temp_belief.event_distributions[:, 1, 1])
+end
+
+
 
 """
 Calculate information gain for a single cell: G(b_k) = H(b_k) * P(event)

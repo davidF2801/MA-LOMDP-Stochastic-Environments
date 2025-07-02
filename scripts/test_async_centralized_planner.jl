@@ -614,7 +614,6 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
             println("next_state_dist: $(next_state_dist)")
             current_state = rand(next_state_dist)
             current_environment = current_state.event_map
-            @infiltrate  # <-- This will drop you into the Infiltrator REPL
 
         end
         

@@ -54,6 +54,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                     planning_mode::Symbol=:script, rng::AbstractRNG=Random.GLOBAL_RNG)
     
     println("🛰️  Ground Station: Checking for sync opportunities at time $(t)")
+    gs_state.time_step = t
     
     for (i, agent) in enumerate(agents)
         agent_id = agent.id
@@ -77,7 +78,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
             # Compute new plan based on planning mode
             if planning_mode == :script
                 println("📋 Computing macro-script for agent $(agent_id)")
-                new_plan = MacroPlannerAsync.best_script(env, gs_state.global_belief, agent, C_i, other_plans, rng=rng)
+                new_plan = MacroPlannerAsync.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :script
             elseif planning_mode == :policy
                 println("🌳 Computing policy tree for agent $(agent_id)")
@@ -104,7 +105,6 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
     end
     
     # Update ground station time
-    gs_state.time_step = t
 end
 
 """
