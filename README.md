@@ -22,6 +22,7 @@ We formalize the environment as a **Multi-Agent Locally Observable Markov Decisi
   * Centralized: Continuous or periodic uplink to a global planner.
   * Decentralized: Peer-to-peer sharing with belief fusion.
   * Hybrid: Agents sync asynchronously with a ground station to update their policy.
+* **Advanced Information Gain**: Sophisticated expected information gain calculation considering other agents' future observations and proper timing.
 
 ### Goal
 
@@ -48,21 +49,34 @@ This framework is applicable to:
 │   │   ├── Environment.jl
 │   │   ├── spatial_grid.jl
 │   │   ├── event_dynamics.jl
+│   │   ├── dbn_proper.jl
 │   │   └── sensor_models.jl
 │   │
-│   └── agents/
-│       ├── Agents.jl
-│       ├── trajectory_planner.jl
-│       ├── sensing_policy.jl
-│       ├── communication.jl
-│       └── belief_management.jl
+│   ├── agents/
+│   │   ├── Agents.jl
+│   │   ├── trajectory_planner.jl
+│   │   ├── sensing_policy.jl
+│   │   ├── communication.jl
+│   │   └── belief_management.jl
+│   │
+│   ├── planners/
+│   │   ├── Planners.jl
+│   │   ├── macro_planner_async.jl
+│   │   ├── macro_planner_sync.jl
+│   │   ├── policy_tree_planner.jl
+│   │   └── ground_station.jl
+│   │
+│   └── types/
+│       └── Types.jl
 │
 ├── scripts/              # Execution scripts
-│   ├── run_simulation.jl
+│   ├── test_async_centralized_planner.jl
+│   ├── test_centralized_planner.jl
+│   ├── test_modular_system.jl
 │   └── plot_results.jl
 │
-└── plots/                # Output directory for visualizations
-    └── *.png, *.mp4, etc.
+└── visualizations/       # Output directory for visualizations
+    └── *.png, *.gif, etc.
 ```
 
 ## Key Components
@@ -70,41 +84,51 @@ This framework is applicable to:
 ### Environment
 - **SpatialGrid**: 2D discretized environment with stochastic event dynamics
 - **EventDynamics**: Markov chain and spatial contagion models for event evolution
+- **DBNTransitionModel**: Dynamic Bayesian Network for proper belief evolution
 - **SensorModels**: Range-limited sensor footprints and observation models
 
 ### Agents
-- **TrajectoryPlanner**: Deterministic periodic trajectory management
+- **TrajectoryPlanner**: Deterministic periodic trajectory management with phase offsets
 - **SensingPolicy**: Decision-making for where to sense within footprint
 - **Communication**: Coordination strategies (centralized/decentralized/hybrid)
-- **BeliefManagement**: Local belief state estimation and fusion
+- **BeliefManagement**: Local belief state estimation and fusion with 3D distributions
+
+### Planners
+- **MacroPlannerAsync**: Asynchronous centralized planning with decentralized execution
+- **MacroPlannerSync**: Synchronous centralized planning
+- **PolicyTreePlanner**: Closed-loop policy tree planning
+- **GroundStation**: Central coordination and plan management
 
 ## Current Implementation Status
 
 ### ✅ Completed
 - **Project Structure**: Complete modular architecture with proper separation of concerns
 - **Core Types**: All major data structures and interfaces defined
-- **POMDP Interface**: Full POMDPs.jl interface implementation skeleton
-- **Trajectory Management**: Circular and linear periodic trajectory implementations
+- **POMDP Interface**: Full POMDPs.jl interface implementation
+- **Trajectory Management**: Circular and linear periodic trajectory implementations with phase offsets
 - **Sensor Models**: Range-limited sensor footprint calculations
-- **Event Dynamics**: Stochastic event evolution framework
-- **Belief Management**: Local belief state structure and update framework
+- **Event Dynamics**: Stochastic event evolution framework with DBN models
+- **Belief Management**: 3D belief state structure and DBN-based evolution
 - **Communication Protocols**: Centralized, decentralized, and hybrid communication models
 - **Sensing Policies**: Information gain, random, and greedy sensing strategies
+- **Asynchronous Planning**: Ground station coordination with periodic synchronization
+- **Advanced Information Gain**: Sophisticated expected information gain calculation considering:
+  - Other agents' scheduled observations
+  - Proper global timeline conversion with phase offsets
+  - Belief evolution between observations
+  - Observation outcome probability weighting
+- **Visualization**: Agent trajectories, environment evolution, and action statistics
 
 ### 🔄 In Progress
-- **State Transitions**: Event dynamics implementation
-- **Observation Generation**: Sensor observation models
-- **Reward Functions**: Information gain-based reward calculations
-- **Belief Updates**: Bayesian belief update algorithms
-- **Communication Logic**: Actual message passing and belief fusion
+- **Policy Tree Planning**: Closed-loop policy implementation
+- **Performance Optimization**: Computational efficiency improvements
+- **Advanced Coordination**: More sophisticated multi-agent coordination strategies
 
 ### 📋 TODO
-- **Full POMDP Implementation**: Complete all interface functions
-- **Simulation Engine**: Robust multi-agent simulation framework
-- **Policy Evaluation**: Performance metrics and comparison tools
-- **Visualization**: Trajectory and event visualization tools
-- **Testing**: Comprehensive unit and integration tests
+- **Comprehensive Testing**: Unit and integration tests
+- **Performance Benchmarks**: Comparison with baseline methods
 - **Documentation**: API documentation and usage examples
+- **Real-world Validation**: Testing with realistic scenarios
 
 ## Installation
 
@@ -123,11 +147,15 @@ Pkg.instantiate()
 
 ## Usage
 
-### Running the Simulation
+### Running the Asynchronous Centralized Planning Simulation
 
 ```julia
-# Run the main simulation
-include("scripts/run_simulation.jl")
+# Run the main asynchronous simulation
+include("scripts/test_async_centralized_planner.jl")
+
+# Or run a quick test
+simple_test(20, :script)  # 20 steps with macro-script planning
+quick_test(10)            # 10 steps with default settings
 ```
 
 ### Creating Visualizations
@@ -137,19 +165,64 @@ include("scripts/run_simulation.jl")
 include("scripts/plot_results.jl")
 ```
 
+### Configuration
+
+The simulation can be configured by modifying parameters in `scripts/test_async_centralized_planner.jl`:
+
+```julia
+# Main simulation parameters
+const NUM_STEPS = 20                  # Total simulation steps
+const PLANNING_MODE = :script         # :script or :policy
+
+# Environment parameters
+const GRID_WIDTH = 5                  # Grid width
+const GRID_HEIGHT = 5                 # Grid height
+const INITIAL_EVENTS = 2              # Number of initial events
+
+# Agent parameters
+const NUM_AGENTS = 2                  # Number of agents
+const AGENT1_PHASE_OFFSET = 0         # Phase offset for agent 1
+const AGENT2_PHASE_OFFSET = 3         # Phase offset for agent 2
+```
+
+## Advanced Features
+
+### Expected Information Gain Calculation
+
+The system implements a sophisticated expected information gain calculation that:
+
+1. **Identifies Future Observations**: Determines which other agents will observe a cell before the current agent's evaluation time
+2. **Global Timeline Conversion**: Properly converts agent timesteps to global simulation time using phase offsets
+3. **Belief Evolution Simulation**: Simulates belief evolution between observations using DBN models
+4. **Observation Outcome Weighting**: Averages information gains weighted by observation outcome probabilities
+
+### Asynchronous Multi-Agent Coordination
+
+- **Ground Station Coordination**: Central planning with periodic synchronization
+- **Phase Offset Handling**: Proper timing coordination between agents with different phase offsets
+- **Plan Management**: Ground station maintains and distributes agent plans
+- **Synchronization Events**: Agents sync with ground station at periodic intervals
+
+### Belief State Management
+
+- **3D Belief Distributions**: Belief states represented as 3D arrays [states, height, width]
+- **DBN Evolution**: Dynamic Bayesian Network for proper belief evolution over time
+- **Multi-State Events**: Support for multiple event states (NO_EVENT, EVENT_PRESENT, etc.)
+- **Uncertainty Tracking**: Entropy-based uncertainty measurement
+
 ## POMDPs.jl Integration
 
 This project demonstrates several key POMDPs.jl concepts:
 
 1. **MA-LOMDP Interface**: Multi-agent locally observable MDP implementation
 2. **Belief States**: Local belief management for partial observability
-3. **Information Gain Rewards**: Reward functions based on uncertainty reduction
+3. **Information Gain Rewards**: Reward functions based on uncertainty reduction and wiugthed by the expected probability of an event happening
 4. **Multi-Agent Simulation**: Coordinated agent behavior simulation
 
 ### Key POMDPs.jl Functions Implemented
 
 - `initialstate(pomdp)`: Initial environment state distribution
-- `transition(pomdp, s, a)`: Stochastic event dynamics
+- `transition(pomdp, s, a)`: Stochastic event dynamics with DBN models
 - `observation(pomdp, a, sp)`: Range-limited sensor observations
 - `reward(pomdp, s, a, sp)`: Information gain-based rewards
 - `discount(pomdp)`: Discount factor for long-term planning
@@ -163,20 +236,21 @@ using POMDPs
 using POMDPTools
 
 # Create environment with stochastic event dynamics
-env = SpatialGrid(20, 20, EventDynamics())
+event_dynamics = EventDynamics(0.01, 0.03, 0.01, 0.03, 0.02)
+env = SpatialGrid(5, 5, event_dynamics, agents, 1.5, 0.95, 2, 1, (3, 1))
 
-# Create agents with periodic trajectories
+# Create agents with periodic trajectories and phase offsets
 agents = [
-    Agent(1, CircularTrajectory(10, 10, 5.0, 20), RangeLimitedSensor(3.0, π/2, 0.0), 0),
-    Agent(2, LinearTrajectory(5, 5, 15, 15, 15), RangeLimitedSensor(2.5, π/3, 0.0), 0)
+    Agent(1, LinearTrajectory(3, 1, 3, 5, 5), RangeLimitedSensor(1.5, π/2, 0.1), 0),
+    Agent(2, LinearTrajectory(3, 1, 3, 5, 5), RangeLimitedSensor(1.5, π/2, 0.1), 3)
 ]
 
-# Create sensing policy
-policy = InformationGainPolicy(0.1)
+# Initialize ground station
+gs_state = GroundStation.initialize_ground_station(env, agents, num_states=2)
 
-# Run simulation
-sim = HistoryRecorder(max_steps=100)
-hist = simulate(sim, env, agents, policy)
+# Run asynchronous simulation
+gs_state, agents, reward, sync_events, agent_rewards, env_evolution, action_history = 
+    simulate_async_centralized_planning(20, planning_mode=:script)
 ```
 
 ## Dependencies
@@ -189,6 +263,8 @@ hist = simulate(sim, env, agents, policy)
 - **Random**: Random number generation
 - **LinearAlgebra**: Linear algebra operations
 - **Statistics**: Statistical functions
+- **Plots**: Visualization
+- **Infiltrator**: Debugging
 
 ## Contributing
 
@@ -210,25 +286,28 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Development Roadmap
 
-### Phase 1: Core Implementation (Current)
+### Phase 1: Core Implementation ✅
 - [x] Project structure and architecture
 - [x] Basic types and interfaces
-- [ ] Complete POMDP interface implementation
-- [ ] Basic simulation framework
+- [x] Complete POMDP interface implementation
+- [x] Basic simulation framework
+- [x] Asynchronous multi-agent coordination
+- [x] Advanced information gain calculation
 
-### Phase 2: Advanced Features
-- [ ] Belief state algorithms (particle filters, Kalman filters)
-- [ ] Advanced sensing policies
-- [ ] Communication protocol implementations
+### Phase 2: Advanced Features 🔄
+- [x] Belief state algorithms (DBN-based evolution)
+- [x] Advanced sensing policies with multi-agent coordination
+- [x] Communication protocol implementations
 - [ ] Performance optimization
+- [ ] Policy tree planning improvements
 
-### Phase 3: Analysis and Visualization
-- [ ] Policy evaluation tools
-- [ ] Visualization framework
+### Phase 3: Analysis and Visualization ✅
+- [x] Policy evaluation tools
+- [x] Visualization framework
 - [ ] Performance benchmarks
 - [ ] Documentation and examples
 
-### Phase 4: Extensions
+### Phase 4: Extensions 📋
 - [ ] Additional trajectory types
 - [ ] More complex event dynamics
 - [ ] Real-world data integration
