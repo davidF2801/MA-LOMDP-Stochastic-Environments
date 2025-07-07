@@ -528,12 +528,15 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
     ground_station_pos = (GROUND_STATION_X, GROUND_STATION_Y)  # Position where agents sync
     
     # Track performance metrics
-    total_reward = 0.0
     sync_events = []
     agent_rewards = Dict{Int, Float64}()
     for agent in agents
         agent_rewards[agent.id] = 0.0
     end
+    
+    # Track events for reward calculation
+    all_events_ever_appeared = Set{Tuple{Int, Int}}()  # (x, y) coordinates of all events that ever appeared
+    observed_events = Set{Tuple{Int, Int}}()  # (x, y) coordinates of events that were observed at least once
     
     # Track environment and actions for visualization
     environment_evolution = Matrix{EventState}[]
@@ -563,22 +566,12 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
         
         # Execute agent actions
         joint_actions = SensingAction[]
-        step_reward = 0.0
         
         for agent in agents
             # Get plan from ground station and execute it
             plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
             action = execute_plan(agent, plan, plan_type, agent.observation_history)
-            @infiltrate
             push!(joint_actions, action)
-            
-            # Calculate reward for this agent
-            if !isempty(action.target_cells)
-                # Simple reward: number of cells sensed
-                agent_reward = length(action.target_cells) * 0.1
-                agent_rewards[agent.id] += agent_reward
-                step_reward += agent_reward
-            end
             
             # Use POMDP interface to get observations
             if !isempty(action.target_cells)
@@ -586,6 +579,13 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
                 observation_dist = POMDPs.observation(env, action, current_state)
                 observation = rand(observation_dist)
                 push!(agent.observation_history, observation)
+                
+                # Track observed events for reward calculation
+                for (i, cell) in enumerate(observation.sensed_cells)
+                    if i <= length(observation.event_states) && observation.event_states[i] == EVENT_PRESENT
+                        push!(observed_events, cell)
+                    end
+                end
                 
                 # Debug: print what was observed
                 events_found = count(==(EVENT_PRESENT), observation.event_states)
@@ -598,11 +598,16 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
 
         end
         
+        # Track events that appeared in this step
+        for y in 1:GRID_HEIGHT, x in 1:GRID_WIDTH
+            if current_environment[y, x] == EVENT_PRESENT
+                push!(all_events_ever_appeared, (x, y))
+            end
+        end
+        
         # Record environment state and actions for visualization
         push!(environment_evolution, copy(current_environment))
         push!(action_history, joint_actions)
-        
-        total_reward += step_reward
         
         # Update environment using POMDP transition model
         if t < num_steps - 1  # Don't update on last step
@@ -625,14 +630,24 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
         end
     end
     
+    # Calculate final reward metric: percentage of events observed
+    total_events_appeared = length(all_events_ever_appeared)
+    total_events_observed = length(observed_events)
+    event_observation_percentage = total_events_appeared > 0 ? (total_events_observed / total_events_appeared) * 100.0 : 0.0
+    
     # Print final results
     println("\n📈 Simulation Results")
     println("====================")
-    println("Total reward: $(round(total_reward, digits=3))")
-    println("Total sync events: $(length(sync_events))")
-    println("Agent rewards:")
+    println("Event Observation Performance:")
+    println("  Total events that appeared: $(total_events_appeared)")
+    println("  Total events observed: $(total_events_observed)")
+    println("  Event observation percentage: $(round(event_observation_percentage, digits=1))%")
+    println("")
+    println("System Performance:")
+    println("  Total sync events: $(length(sync_events))")
+    println("  Agent rewards (legacy):")
     for (agent_id, reward) in agent_rewards
-        println("  Agent $(agent_id): $(round(reward, digits=3))")
+        println("    Agent $(agent_id): $(round(reward, digits=3))")
     end
     
     println("\n📡 Sync Events:")
@@ -659,7 +674,7 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
     println("  - agent_trajectories.png (agent paths with ground station)")
     println("  - action_statistics.png (sensing and communication stats)")
     
-    return gs_state, agents, total_reward, sync_events, agent_rewards, environment_evolution, action_history
+    return gs_state, agents, event_observation_percentage, sync_events, agent_rewards, environment_evolution, action_history
 end
 
 """
@@ -671,30 +686,30 @@ function compare_planning_modes(num_steps::Int=COMPARISON_STEPS)
     
     # Test macro-script planning
     println("\n1️⃣ Testing Macro-Script Planning")
-    gs_state_script, agents_script, reward_script, sync_script, agent_rewards_script, env_script, action_script = 
+    gs_state_script, agents_script, percentage_script, sync_script, agent_rewards_script, env_script, action_script = 
         simulate_async_centralized_planning(num_steps, planning_mode=:script)
     
     # Test policy tree planning
     println("\n2️⃣ Testing Policy Tree Planning")
-    gs_state_policy, agents_policy, reward_policy, sync_policy, agent_rewards_policy, env_policy, action_policy = 
+    gs_state_policy, agents_policy, percentage_policy, sync_policy, agent_rewards_policy, env_policy, action_policy = 
         simulate_async_centralized_planning(num_steps, planning_mode=:policy)
     
     # Compare results
     println("\n📊 Comparison Results")
     println("====================")
     println("Macro-Script Planning:")
-    println("  Total reward: $(round(reward_script, digits=3))")
+    println("  Event observation percentage: $(round(percentage_script, digits=1))%")
     println("  Sync events: $(length(sync_script))")
     
     println("\nPolicy Tree Planning:")
-    println("  Total reward: $(round(reward_policy, digits=3))")
+    println("  Event observation percentage: $(round(percentage_policy, digits=1))%")
     println("  Sync events: $(length(sync_policy))")
     
     # Create comparison plot
-    p = plot([reward_script, reward_policy], 
+    p = plot([percentage_script, percentage_policy], 
              label=["Macro-Script" "Policy Tree"],
              xlabel="Planning Mode",
-             ylabel="Total Reward",
+             ylabel="Event Observation Percentage (%)",
              title="Planning Mode Comparison",
              marker=:circle,
              markersize=8,
@@ -723,10 +738,10 @@ function simple_test(num_steps::Int=NUM_STEPS, planning_mode::Symbol=PLANNING_MO
     println("Planning mode: $(planning_mode)")
     println("Number of agents: 2")
     
-    gs_state, agents, reward, sync_events, agent_rewards, env_evolution, action_history = 
+    gs_state, agents, percentage, sync_events, agent_rewards, env_evolution, action_history = 
         simulate_async_centralized_planning(num_steps, planning_mode=planning_mode)
     
-    return gs_state, agents, reward, sync_events, agent_rewards, env_evolution, action_history
+    return gs_state, agents, percentage, sync_events, agent_rewards, env_evolution, action_history
 end
 
 """
@@ -749,7 +764,7 @@ println("  Number of agents: 2 (same circular trajectory, different phases)")
 
 # Test basic functionality
 println("\n🧪 Basic Functionality Test")
-gs_state, agents, reward, sync_events, agent_rewards, env_evolution, action_history = simple_test()
+gs_state, agents, percentage, sync_events, agent_rewards, env_evolution, action_history = simple_test()
 
 # # Compare planning modes (only if NUM_STEPS is reasonable)
 # if NUM_STEPS <= 100

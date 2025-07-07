@@ -241,4 +241,14 @@ export Agent
 # Export helper functions
 export get_event_probability, set_event_probability!, get_event_probability_vector, set_event_probability_vector!, normalize_cell_distribution!
 
+# Add RSP-related types
+const EventMap = Matrix{EventState}
+
+@enum DynamicsMode begin
+    toy_dbn
+    rsp
+end
+
+export EventMap, DynamicsMode, toy_dbn, rsp
+
 end # module Types 

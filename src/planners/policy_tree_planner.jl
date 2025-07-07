@@ -400,7 +400,7 @@ function simulate_transition(env, current_state, joint_action, rng::AbstractRNG)
     # Update agent positions based on their trajectories
     new_state.time_step += 1
     for (i, agent) in enumerate(env.agents)
-        new_state.agent_positions[i] = get_position_at_time(agent.trajectory, new_state.time_step)
+        new_state.agent_positions[i] = get_position_at_time(agent.trajectory, new_state.time_step, agent.phase_offset)
     end
     
     return new_state

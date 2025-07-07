@@ -11,11 +11,13 @@ import ..Types.EventState, ..Types.NO_EVENT, ..Types.EVENT_PRESENT, ..Types.EVEN
 import ..Types.SensingAction, ..Types.GridObservation, ..Types.Agent
 import ..Types.Trajectory, ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.RangeLimitedSensor
 import ..Types.EventDynamics, ..Types.TwoStateEventDynamics, ..Types.Deterministic
+import ..Types.DynamicsMode, ..Types.toy_dbn, ..Types.rsp
 
 # Import belief management types from Types module
 import ..Types.Belief
 # Import belief management functions
 import ..Agents.BeliefManagement: update_belief_with_observation, predict_belief_evolution_dbn
+# Import RSP functions - will be available after event_dynamics.jl is included
 
 """
 GridState - Represents the state of the spatial grid
@@ -154,7 +156,7 @@ end
 SpatialGrid - A 2D discretized environment for multi-agent information gathering
 Supports rectangular grids with separate width and height
 """
-struct SpatialGrid <: POMDP{GridState, SensingAction, GridObservation}
+mutable struct SpatialGrid <: POMDP{GridState, SensingAction, GridObservation}
     width::Int
     height::Int
     event_dynamics::EventDynamics
@@ -165,6 +167,9 @@ struct SpatialGrid <: POMDP{GridState, SensingAction, GridObservation}
     initial_events::Int    # Number of initial events
     max_sensing_targets::Int  # Maximum cells an agent can sense per step
     ground_station_pos::Tuple{Int, Int}  # Position of the ground station
+    dynamics::DynamicsMode  # Dynamics mode (toy_dbn or rsp)
+    ignition_prob::Union{Matrix{Float64}, Nothing}  # Ignition probability map for RSP
+    pre_enumerated_worlds::Union{Vector{Tuple{Vector{EventMap}, Float64}}, Nothing}  # Pre-computed world trajectories
 end
 
 """
@@ -179,7 +184,7 @@ function SpatialGrid(width::Int, height::Int, event_dynamics::EventDynamics, age
         push!(locality_functions, locality)
     end
     
-    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos)
+    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing)
 end
 
 """
@@ -202,7 +207,7 @@ function SpatialGrid(width::Int, height::Int, agents::Vector{Agent},
     initial_events = 1
     max_sensing_targets = 1
     
-    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos)
+    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing)
 end
 
 """
@@ -258,14 +263,22 @@ function POMDPs.transition(pomdp::SpatialGrid, s::GridState, a::SensingAction)
     new_event_map = copy(s.event_map)
     new_time_step = s.time_step + 1
     
-    # Update event dynamics
+    # Update event dynamics based on dynamics mode
     rng = Random.GLOBAL_RNG
-    update_events!(pomdp.event_dynamics, new_event_map, rng)
+    if pomdp.dynamics == Types.rsp && pomdp.ignition_prob !== nothing
+        # Use RSP transition - call the function from EventDynamicsModule
+        EventDynamicsModule.transition_rsp!(new_event_map, s.event_map, pomdp.ignition_prob, rng)
+    else
+        # Use DBN transition
+        update_events!(pomdp.event_dynamics, new_event_map, rng)
+    end
     
     # Update agent positions based on trajectories
     new_agent_positions = Vector{Tuple{Int, Int}}()
     for (i, trajectory) in enumerate(s.agent_trajectories)
-        new_pos = get_position_at_time(trajectory, new_time_step)
+        # Get the corresponding agent to access phase offset
+        agent = pomdp.agents[i]
+        new_pos = get_position_at_time(trajectory, new_time_step, agent.phase_offset)
         push!(new_agent_positions, new_pos)
     end
     
@@ -509,6 +522,15 @@ function get_position_at_time(trajectory::CircularTrajectory, time::Int)
 end
 
 """
+get_position_at_time(trajectory::CircularTrajectory, time::Int, phase_offset::Int)
+Gets agent position at a specific time for circular trajectory with phase offset
+"""
+function get_position_at_time(trajectory::CircularTrajectory, time::Int, phase_offset::Int)
+    adjusted_time = time + phase_offset
+    return get_position_at_time(trajectory, adjusted_time)
+end
+
+"""
 get_position_at_time(trajectory::LinearTrajectory, time::Int)
 Gets agent position at a specific time for linear trajectory
 """
@@ -517,6 +539,15 @@ function get_position_at_time(trajectory::LinearTrajectory, time::Int)
     x = round(Int, trajectory.start_x + t * (trajectory.end_x - trajectory.start_x))
     y = round(Int, trajectory.start_y + t * (trajectory.end_y - trajectory.start_y))
     return (x, y)
+end
+
+"""
+get_position_at_time(trajectory::LinearTrajectory, time::Int, phase_offset::Int)
+Gets agent position at a specific time for linear trajectory with phase offset
+"""
+function get_position_at_time(trajectory::LinearTrajectory, time::Int, phase_offset::Int)
+    adjusted_time = time + phase_offset
+    return get_position_at_time(trajectory, adjusted_time)
 end
 
 """

@@ -23,6 +23,9 @@ using .Planners
 export simulate_environment
 
 # Re-export commonly used types from Types module
-export Agent, SensingAction, EventState, NO_EVENT, EVENT_PRESENT, CircularTrajectory, LinearTrajectory, RangeLimitedSensor, Belief
+export Agent, SensingAction, EventState, NO_EVENT, EVENT_PRESENT, CircularTrajectory, LinearTrajectory, RangeLimitedSensor, Belief, DynamicsMode, toy_dbn, rsp, EventDynamics
+
+# Re-export from Environment module
+export SpatialGrid
 
 end # module 

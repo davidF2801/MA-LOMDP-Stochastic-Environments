@@ -3,6 +3,7 @@ module GroundStation
 using POMDPs
 using POMDPTools
 using Random
+using Infiltrator
 using ..Types
 using ..Environment
 using ..Agents
@@ -26,7 +27,10 @@ import ..Types.EventState2, ..Types.NO_EVENT_2, ..Types.EVENT_PRESENT_2
 # Import EventDynamicsModule functions through Environment
 import ..Environment.EventDynamicsModule.DBNTransitionModel2, ..Environment.EventDynamicsModule.predict_next_belief_dbn
 import ..Agents.BeliefManagement: update_cell_distribution, get_neighbor_event_probabilities
-export maybe_sync!, GroundStationState
+import ..Agents.BeliefManagement: predict_belief_rsp
+import ..Environment.EventDynamicsModule: rsp_transition_probs
+
+export maybe_sync!, GroundStationState, update_global_belief_rsp!, precompute_worlds!
 
 """
 GroundStationState - Maintains global belief and agent synchronization info
@@ -36,6 +40,7 @@ mutable struct GroundStationState
     agent_last_sync::Dict{Int, Int}  # Last sync time for each agent
     agent_plans::Dict{Int, Any}  # Current plans for each agent
     agent_plan_types::Dict{Int, Symbol}  # :script or :policy for each agent
+    agent_observation_history::Dict{Int, Vector{Tuple{Int, Tuple{Int, Int}, EventState}}}  # (timestep, cell, observed_state) for each agent
     time_step::Int
 end
 
@@ -58,7 +63,6 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
     
     for (i, agent) in enumerate(agents)
         agent_id = agent.id
-        
         # Check if agent is in range for synchronization
         if in_range(agent, t, env, env.ground_station_pos)
             println("📡 Agent $(agent_id) in range at time $(t)")
@@ -66,6 +70,21 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
             # Upload observations since last contact
             observations = get_agent_observations_since_sync(agent, gs_state.agent_last_sync[agent_id], t)
             println("📊 Agent $(agent_id) uploading $(length(observations)) observations since last sync (t=$(gs_state.agent_last_sync[agent_id]))")
+            
+            # Store observations in ground station history
+            # Each observation corresponds to one timestep since last sync
+            for (obs_idx, observation) in enumerate(observations)
+                for (i, cell) in enumerate(observation.sensed_cells)
+                    if i <= length(observation.event_states)
+                        observed_state = observation.event_states[i]
+                        # Calculate the actual timestep when this observation occurred
+                        # obs_idx is 1-based, so we add it to the last sync time
+                        obs_timestep = gs_state.agent_last_sync[agent_id] + obs_idx
+                        push!(gs_state.agent_observation_history[agent_id], (obs_timestep, cell, observed_state))
+                    end
+                end
+            end
+            
             update_global_belief!(gs_state.global_belief, observations, env)
             
             # Calculate contact horizon (steps until next sync)
@@ -330,14 +349,16 @@ function initialize_ground_station(env, agents; num_states::Int=2)
     agent_last_sync = Dict{Int, Int}()
     agent_plans = Dict{Int, Any}()
     agent_plan_types = Dict{Int, Symbol}()
+    agent_observation_history = Dict{Int, Vector{Tuple{Int, Tuple{Int, Int}, EventState}}}()
     
     for agent in agents
         agent_last_sync[agent.id] = -1  # No sync yet
         agent_plans[agent.id] = nothing
         agent_plan_types[agent.id] = :script
+        agent_observation_history[agent.id] = Tuple{Int, Tuple{Int, Int}, EventState}[]
     end
     
-    return GroundStationState(global_belief, agent_last_sync, agent_plans, agent_plan_types, 0)
+    return GroundStationState(global_belief, agent_last_sync, agent_plans, agent_plan_types, agent_observation_history, 0)
 end
 
 """
@@ -366,8 +387,6 @@ function get_agent_plan(agent, gs_state::GroundStationState)
     return plan, plan_type
 end
 
-
-
 """
 Print ground station status
 """
@@ -387,6 +406,158 @@ function print_status(gs_state::GroundStationState)
             end
         else
             println("  Agent $(agent_id): no plan")
+        end
+    end
+end
+
+"""
+update_global_belief_rsp!(gs_state, obs_batch, λmap, now)
+Update global belief using RSP dynamics after receiving observations
+"""
+function update_global_belief_rsp!(gs_state::GroundStationState, obs_batch::Vector{Tuple{Agent, GridObservation}}, λmap::Matrix{Float64}, now::Int)
+    # 1. Collapse belief with new observations
+    for (agent, observation) in obs_batch
+        # Update belief with this observation using existing function
+        # This assumes we have a dummy action for the observation
+        dummy_action = SensingAction(agent.id, observation.sensed_cells, false)
+        
+        # For now, we'll do a simple update - in a full implementation,
+        # we'd call update_belief_state with proper event dynamics
+        if gs_state.global_belief !== nothing
+            # Simple collapse to certainty for observed cells
+            for (i, cell) in enumerate(observation.sensed_cells)
+                x, y = cell
+                if 1 <= x <= size(λmap, 2) && 1 <= y <= size(λmap, 1)
+                    observed_state = observation.event_states[i]
+                    
+                    # Update belief distribution for this cell
+                    if observed_state == EVENT_PRESENT
+                        gs_state.global_belief.event_distributions[1, y, x] = 0.0  # NO_EVENT
+                        gs_state.global_belief.event_distributions[2, y, x] = 1.0  # EVENT_PRESENT
+                    else
+                        gs_state.global_belief.event_distributions[1, y, x] = 1.0  # NO_EVENT
+                        gs_state.global_belief.event_distributions[2, y, x] = 0.0  # EVENT_PRESENT
+                    end
+                end
+            end
+        end
+    end
+    
+    # 2. Calculate Δt since last update
+    Δt = now - gs_state.time_step
+    
+    # 3. Propagate unobserved part using RSP
+    if gs_state.global_belief !== nothing && Δt > 0
+        gs_state.global_belief = predict_belief_rsp(gs_state.global_belief, λmap, Δt)
+    end
+    
+    gs_state.time_step = now
+end
+
+"""
+precompute_worlds!(env, B0::Belief, C::Int)
+Pre-compute all possible world trajectories for the next C timesteps
+"""
+function precompute_worlds!(env, B0::Belief, C::Int)
+    if !hasfield(typeof(env), :ignition_prob)
+        # Create a simple ignition probability map if not present
+        height, width = size(B0.event_distributions)[2:3]
+        env.ignition_prob = fill(0.1, height, width)  # Uniform ignition probability
+    end
+    
+    env.pre_enumerated_worlds = enumerate_worlds(B0, C, env.ignition_prob)
+    
+end
+
+"""
+enumerate_worlds(B0::Belief, C::Int, λmap::Matrix{Float64}) -> Vector{Tuple{Vector{EventMap}, Float64}}
+Enumerate all possible world trajectories using exact enumeration
+"""
+function enumerate_worlds(B0::Belief, C::Int, λmap::Matrix{Float64})
+    num_states, height, width = size(B0.event_distributions)
+    
+    # Convert belief to event map probabilities
+    event_probs = Matrix{Float64}(undef, height, width)
+    for y in 1:height, x in 1:width
+        if num_states >= 2
+            event_probs[y, x] = B0.event_distributions[2, y, x]  # P(EVENT_PRESENT)
+        else
+            event_probs[y, x] = 0.0
+        end
+    end
+    
+    # For small grids, enumerate all possible initial states
+    total_cells = height * width
+    max_initial_states = 2^total_cells
+    
+    # For computational tractability, limit to reasonable size
+    if max_initial_states > 1000
+        println("⚠️  Grid too large for exact enumeration. Limiting to 1000 initial states.")
+        max_initial_states = 1000
+    end
+    
+    trajectories = Vector{Tuple{Vector{EventMap}, Float64}}()
+    
+    # Enumerate all possible initial states
+    for state_idx in 0:(max_initial_states-1)
+        # Create initial state from binary representation
+        initial_map = Matrix{EventState}(undef, height, width)
+        initial_weight = 1.0
+        
+        for cell_idx in 0:(total_cells-1)
+            y = div(cell_idx, width) + 1
+            x = mod(cell_idx, width) + 1
+            
+            # Check if this cell should have an event based on state_idx
+            bit = (state_idx >> cell_idx) & 1
+            
+            if bit == 1
+                initial_map[y, x] = EVENT_PRESENT
+                initial_weight *= event_probs[y, x]
+            else
+                initial_map[y, x] = NO_EVENT
+                initial_weight *= (1.0 - event_probs[y, x])
+            end
+        end
+        
+        if initial_weight > 0.0
+            # Recursively enumerate all possible trajectories from this initial state
+            enumerate_trajectories_dfs!(trajectories, initial_map, initial_weight, λmap, C, 0, EventMap[])
+        end
+    end
+    return trajectories
+end
+
+"""
+enumerate_trajectories_dfs!(trajectories, current_map, current_weight, λmap, C, depth, current_trajectory)
+Recursively enumerate all possible trajectories using depth-first search
+"""
+function enumerate_trajectories_dfs!(trajectories::Vector{Tuple{Vector{EventMap}, Float64}}, 
+                                   current_map::EventMap, 
+                                   current_weight::Float64, 
+                                   λmap::Matrix{Float64}, 
+                                   C::Int, 
+                                   depth::Int,
+                                   current_trajectory::Vector{EventMap})
+    
+    # Add current state to trajectory
+    trajectory_with_current = [current_trajectory; [copy(current_map)]]
+    
+    if depth == C - 1
+        # We've reached the end of the trajectory (C-1 evolutions from initial state)
+        push!(trajectories, (trajectory_with_current, current_weight))
+        return
+    end
+    
+    # Get all possible next states and their probabilities
+    transition_probs = rsp_transition_probs(current_map, λmap)
+    # Branch on all possible next states
+    for (next_map, transition_prob) in transition_probs
+        if transition_prob > 0.0
+            new_weight = current_weight * transition_prob
+            
+            # Recursively enumerate from this next state
+            enumerate_trajectories_dfs!(trajectories, next_map, new_weight, λmap, C, depth + 1, trajectory_with_current)
         end
     end
 end
