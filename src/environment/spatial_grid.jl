@@ -50,8 +50,13 @@ The FOV (Field of View) is then a subset of these cells chosen as actions.
 """
 function get_observable_cells(locality::LocalityFunction, phase::Int)
     # Get agent position at this phase
-    agent_pos = get_position_at_time(locality.trajectory, phase)
-    
+            #t_normalized = (adjusted_time % agent.trajectory.period) / agent.trajectory.period
+    step_x = abs(locality.trajectory.end_x - locality.trajectory.start_x)/(locality.trajectory.period-1)
+    step_y = abs(locality.trajectory.end_y - locality.trajectory.start_y)/(locality.trajectory.period-1)
+    x = round(Int, locality.trajectory.start_x + phase * step_x)
+    y = round(Int, locality.trajectory.start_y + phase * step_y)
+    agent_pos = (x, y)
+    #agent_pos = get_position_at_time(locality.trajectory, phase)
     # Get all cells within sensor range (FOR - Field of Regard)
     observable_cells = Tuple{Int, Int}[]
     
@@ -170,13 +175,14 @@ mutable struct SpatialGrid <: POMDP{GridState, SensingAction, GridObservation}
     dynamics::DynamicsMode  # Dynamics mode (toy_dbn or rsp)
     ignition_prob::Union{Matrix{Float64}, Nothing}  # Ignition probability map for RSP
     pre_enumerated_worlds::Union{Vector{Tuple{Vector{EventMap}, Float64}}, Nothing}  # Pre-computed world trajectories
+    rsp_params::Any  # Add RSP parameters (NamedTuple or nothing)
 end
 
 """
 Constructor for SpatialGrid with rectangular dimensions
 """
 function SpatialGrid(width::Int, height::Int, event_dynamics::EventDynamics, agents::Vector{Agent}, 
-                    sensor_range::Float64, discount::Float64, initial_events::Int, max_sensing_targets::Int, ground_station_pos::Tuple{Int,Int})
+                    sensor_range::Float64, discount::Float64, initial_events::Int, max_sensing_targets::Int, ground_station_pos::Tuple{Int,Int}, rsp_params=nothing)
     # Create locality functions for each agent
     locality_functions = Vector{LocalityFunction}()
     for agent in agents
@@ -184,7 +190,7 @@ function SpatialGrid(width::Int, height::Int, event_dynamics::EventDynamics, age
         push!(locality_functions, locality)
     end
     
-    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing)
+    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing, rsp_params)
 end
 
 """
@@ -267,10 +273,10 @@ function POMDPs.transition(pomdp::SpatialGrid, s::GridState, a::SensingAction)
     rng = Random.GLOBAL_RNG
     if pomdp.dynamics == Types.rsp && pomdp.ignition_prob !== nothing
         # Use RSP transition - call the function from EventDynamicsModule
-        EventDynamicsModule.transition_rsp!(new_event_map, s.event_map, pomdp.ignition_prob, rng)
+        EventDynamicsModule.transition_rsp!(new_event_map, s.event_map, pomdp.ignition_prob, rng; rsp_params=pomdp.rsp_params)
     else
         # Use DBN transition
-        update_events!(pomdp.event_dynamics, new_event_map, rng)
+    update_events!(pomdp.event_dynamics, new_event_map, rng)
     end
     
     # Update agent positions based on trajectories
@@ -326,40 +332,32 @@ end
 
 """
 POMDPs.observation(pomdp::SpatialGrid, a::SensingAction, sp::GridState)
-Generates observations for the sensing action using locality functions
+Generates observations for the sensing action - simplified version
 """
 function POMDPs.observation(pomdp::SpatialGrid, a::SensingAction, sp::GridState)
-    # Get agent and sensor
-    agent = pomdp.agents[a.agent_id]
+    # If action has no target cells, return empty observation
+    if isempty(a.target_cells)
+        obs = GridObservation(a.agent_id, Tuple{Int, Int}[], EventState[], [])
+        return Deterministic(obs)
+    end
+    
+    # Get agent position
     agent_pos = sp.agent_positions[a.agent_id]
     
-    # Get observable cells using locality function
-    locality = pomdp.locality_functions[a.agent_id]
-    period = get_trajectory_period(agent.trajectory)
-    current_phase = sp.time_step % period
-    observable_cells = get_observable_cells(locality, current_phase)
+    # Generate observation directly from target cells and event map
+    sensed_cells = Tuple{Int, Int}[]
+    event_states = EventState[]
     
-    # Filter target cells to only include observable ones
-    valid_targets = filter(cell -> cell in observable_cells, a.target_cells)
-    
-    # Generate observation using sensor model
-    sensed_cells, event_states = generate_observation(
-        agent.sensor, 
-        agent_pos, 
-        sp.event_map, 
-        valid_targets
-    )
+    for cell in a.target_cells
+        x, y = cell
+        if 1 <= x <= pomdp.width && 1 <= y <= pomdp.height
+            push!(sensed_cells, cell)
+            push!(event_states, sp.event_map[y, x])
+        end
+    end
     
     # Create observation
-    obs = GridObservation(
-        a.agent_id,
-        sensed_cells,
-        event_states,
-        []  # No communication received for now
-    )
-    
-    # Update agent's belief with the new observation
-    update_agent_belief!(agent, a, obs, pomdp)
+    obs = GridObservation(a.agent_id, sensed_cells, event_states, [])
     
     return Deterministic(obs)
 end
@@ -375,9 +373,9 @@ function POMDPs.reward(pomdp::SpatialGrid, s::GridState, a::SensingAction, sp::G
     
     # Use agent's belief instead of hardcoded uniform prior
     # Convert belief distributions to event probabilities for reward calculation
-    belief = Matrix{Float64}(undef, env.height, env.width)
-    for y in 1:env.height
-        for x in 1:env.width
+    belief = Matrix{Float64}(undef, pomdp.height, pomdp.width)
+    for y in 1:pomdp.height
+        for x in 1:pomdp.width
             # Get probability of event present (state 2) from belief distribution
             belief[y, x] = agent.belief.event_distributions[2, y, x]
         end

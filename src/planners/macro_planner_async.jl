@@ -61,7 +61,6 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
             best_value = value
             best_sequence = sequence
         end
-        
         if i % 100 == 0
             println("  Evaluated $(i)/$(length(action_sequences)) sequences, best value: $(round(best_value, digits=3))")
         end
@@ -200,34 +199,6 @@ function get_observed_state_from_world(cell::Tuple{Int, Int}, timestep::Int, env
     return NO_EVENT
 end
 
-
-
-"""
-Get agent's current position
-"""
-function get_agent_position(agent, env)
-    # Calculate position directly using trajectory and phase offset
-    t = get_current_time(env, agent)
-    
-    # Apply phase offset
-    adjusted_time = t + agent.phase_offset
-    
-    # Calculate position based on trajectory type
-    if typeof(agent.trajectory) <: CircularTrajectory
-        angle = 2π * (adjusted_time % agent.trajectory.period) / agent.trajectory.period
-        x = agent.trajectory.center_x + round(Int, agent.trajectory.radius * cos(angle))
-        y = agent.trajectory.center_y + round(Int, agent.trajectory.radius * sin(angle))
-        return (x, y)
-    elseif typeof(agent.trajectory) <: LinearTrajectory
-        t_normalized = (adjusted_time % agent.trajectory.period) / agent.trajectory.period
-        x = round(Int, agent.trajectory.start_x + t_normalized * (agent.trajectory.end_x - agent.trajectory.start_x))
-        y = round(Int, agent.trajectory.start_y + t_normalized * (agent.trajectory.end_y - agent.trajectory.start_y))
-        return (x, y)
-    else
-        return (1, 1)  # fallback
-    end
-end
-
 # Helper to get the current time step for the agent (assume env has a time_step or pass as argument)
 function get_current_time(env, agent)
     # Try to get time_step from env, fallback to 0 if not present
@@ -275,8 +246,7 @@ function get_agent_position_at_time(agent, env, timestep_offset::Int)
     t = get_current_time(env, agent) + timestep_offset
     
     # Apply phase offset
-    adjusted_time = t + agent.phase_offset
-    
+    adjusted_time = t % agent.trajectory.period
     # Calculate position based on trajectory type
     if typeof(agent.trajectory) <: CircularTrajectory
         angle = 2π * (adjusted_time % agent.trajectory.period) / agent.trajectory.period
@@ -284,9 +254,11 @@ function get_agent_position_at_time(agent, env, timestep_offset::Int)
         y = agent.trajectory.center_y + round(Int, agent.trajectory.radius * sin(angle))
         return (x, y)
     elseif typeof(agent.trajectory) <: LinearTrajectory
-        t_normalized = (adjusted_time % agent.trajectory.period) / agent.trajectory.period
-        x = round(Int, agent.trajectory.start_x + t_normalized * (agent.trajectory.end_x - agent.trajectory.start_x))
-        y = round(Int, agent.trajectory.start_y + t_normalized * (agent.trajectory.end_y - agent.trajectory.start_y))
+        #t_normalized = (adjusted_time % agent.trajectory.period) / agent.trajectory.period
+        step_x = abs(agent.trajectory.end_x - agent.trajectory.start_x)/(agent.trajectory.period-1)
+        step_y = abs(agent.trajectory.end_y - agent.trajectory.start_y)/(agent.trajectory.period-1)
+        x = round(Int, agent.trajectory.start_x + adjusted_time * step_x)
+        y = round(Int, agent.trajectory.start_y + adjusted_time * step_y)
         return (x, y)
     else
         return (1, 1)  # fallback
@@ -364,9 +336,6 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
     # Step 3: Initialize branching structure at t_clean
     B_branches = Dict{Int, Vector{Tuple{Belief, Float64}}}()
     B_branches[t_clean] = [(B, 1.0)]
-    if gs_state.time_step == 6
-        @infiltrate
-    end
     # Step 4: Create branching windows for each agent j ≠ i
     branch_windows = Vector{Tuple{Int, Int, Int}}()
     for (j, last_sync) in tau
@@ -445,12 +414,14 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
         a_i = seq[k]
         t_global = tau_i + k - 1
         new_branches = Vector{Tuple{Belief, Float64}}()
-        
         for (B, p_branch) in B_post[t_global]
             obs_set = Vector{Tuple{Int, SensingAction}}(get_scheduled_observations_at_time(t_global, gs_state))
             push!(obs_set, (agent.id, a_i))  # Include our own planned action
+            # Check if all actions in obs_set are wait actions
+            all_wait_actions = all(action.target_cells == Tuple{Int,Int}[] for (_, action) in obs_set)
             
-            if !isempty(obs_set)
+            if !all_wait_actions
+                # At least one action is a sensing action - branch over all possible observation outcomes
                 for obs_combo in enumerate_all_possible_outcomes(B, obs_set)
                     B_new = deepcopy(B)
                     cell, observed_state, probability = obs_combo
@@ -459,6 +430,7 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                     push!(new_branches, (B_next, p_branch * probability))
                 end
             else
+                # All actions are wait actions - just evolve belief without observations
                 B_next = evolve_no_obs(B, env)
                 push!(new_branches, (B_next, p_branch))
             end
@@ -468,10 +440,19 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
         # if gs_state.time_step == 6
         #     @infiltrate
         # end
+        # Infiltrate if the sequence has an action different than wait (empty action)
+        has_non_wait_action = false
+        for a in seq
+            if !isempty(a.target_cells)
+                has_non_wait_action = true
+                break
+            end
+        end
         # Step 6.2: Compute expected reward at time t_global
         expected_reward = 0.0
         for (B_cur, p_branch) in B_post[t_global]
             for cell in a_i.target_cells
+
                 H_before = calculate_cell_entropy(B_cur, cell)
                 H_after = 0.0
                 info_gain = H_before - H_after
@@ -483,7 +464,6 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                 expected_reward -= p_branch * c_obs
             end
         end
-        
         R_seq[k] = expected_reward
         # if gs_state.time_step == 6
         #     @infiltrate

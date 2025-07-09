@@ -8,6 +8,7 @@ using POMDPTools
 using Distributions
 using LinearAlgebra
 using Random
+using Infiltrator
 using ..Types
 
 # Import types from the parent module
@@ -245,15 +246,18 @@ Sample the Díaz-Avalos Random Spread Process one time step.
 old_map, new_map :: EventMap  (values: NO_EVENT, EVENT_PRESENT)
 λmap              :: Matrix{Float64}   # ignition intensity already standardised
 """
-function transition_rsp!(new_map::EventMap, old_map::EventMap, λmap::Matrix{Float64}, rng::AbstractRNG)
+function transition_rsp!(new_map::EventMap, old_map::EventMap, λmap::Matrix{Float64}, rng::AbstractRNG; rsp_params=nothing)
     height, width = size(old_map)
+    if rsp_params === nothing
+        error("RSP parameters must be provided via rsp_params keyword argument!")
+    end
     
     # Initialize new map
     new_map .= old_map
     
     # For each cell, apply the same transition model used in belief evolution
     for y in 1:height, x in 1:width
-        current_state = old_map[y, x] == NO_EVENT ? 1 : 2  # Convert to 1-based index
+        current_state = old_map[y, x]  # 0 for NO_EVENT, 1 for EVENT_PRESENT
         
         # Get neighbor states for this cell
         neighbor_states = Int[]
@@ -264,14 +268,14 @@ function transition_rsp!(new_map::EventMap, old_map::EventMap, λmap::Matrix{Flo
             
             nx, ny = x + dx, y + dy
             if 1 <= nx <= width && 1 <= ny <= height
-                neighbor_state = old_map[ny, nx] == NO_EVENT ? 1 : 2
-                push!(neighbor_states, neighbor_state)
+                push!(neighbor_states, Int(old_map[ny, nx]))
             end
         end
-        
         # Calculate transition probabilities for both possible next states using RSP model
-        prob_no_event = get_transition_probability_rsp(1, current_state, neighbor_states, λmap, x, y)
-        prob_event = get_transition_probability_rsp(2, current_state, neighbor_states, λmap, x, y)
+        prob_no_event = get_transition_probability_rsp(Int(NO_EVENT), Int(current_state), neighbor_states;
+            λ=rsp_params.lambda, β0=rsp_params.beta0, α=rsp_params.alpha, δ=rsp_params.delta, μ=rsp_params.mu)
+        prob_event = get_transition_probability_rsp(Int(EVENT_PRESENT), Int(current_state), neighbor_states;
+            λ=rsp_params.lambda, β0=rsp_params.beta0, α=rsp_params.alpha, δ=rsp_params.delta, μ=rsp_params.mu)
         
         # Normalize probabilities
         total_prob = prob_no_event + prob_event
@@ -282,12 +286,11 @@ function transition_rsp!(new_map::EventMap, old_map::EventMap, λmap::Matrix{Flo
             prob_no_event = 0.5
             prob_event = 0.5
         end
-        
         # Sample the next state
         if rand(rng) < prob_event
-            new_map[y, x] = EVENT_PRESENT
+            new_map[y, x] = EventState(1)
         else
-            new_map[y, x] = NO_EVENT
+            new_map[y, x] = EventState(0)
         end
     end
 end
@@ -325,9 +328,9 @@ function rsp_transition_probs(old_map::EventMap, λmap::Matrix{Float64})
         for (i, (x, y)) in enumerate(variable_cells)
             bit = (combination >> (i-1)) & 1
             if bit == 1
-                new_map[y, x] = EVENT_PRESENT
+                new_map[y, x] = 1
                 # Calculate probability of this transition based on RSP dynamics
-                if old_map[y, x] == NO_EVENT
+                if old_map[y, x] == 0
                     # Birth probability
                     prob *= λmap[y, x] * 0.1  # Spontaneous birth
                 else
@@ -335,9 +338,9 @@ function rsp_transition_probs(old_map::EventMap, λmap::Matrix{Float64})
                     prob *= (1.0 - 0.05)  # 1 - death_rate
                 end
             else
-                new_map[y, x] = NO_EVENT
+                new_map[y, x] = 0
                 # Calculate probability of this transition
-                if old_map[y, x] == EVENT_PRESENT
+                if old_map[y, x] == 1
                     # Death probability
                     prob *= 0.05  # death_rate
                 else
@@ -404,32 +407,33 @@ function get_transition_probability(next_state::Int, current_state::Int, neighbo
         end
     end
 end
+"""
+Keyword parameters
+------------------
+λ   – local ignition intensity (could be λmap[y,x]; 0–1).  
+β0  – spontaneous (background) ignition probability when no neighbours burn.  
+α   – Contagion contribution of each active neighbour.  
+δ   – Probability the fire persists (EVENT→EVENT).  
+μ   – Probability the fire dies   (EVENT→NO_EVENT).
 
+Tune these parameters to explore different behaviours.
 """
-Get transition probability for RSP with cell position (for real world simulation)
-"""
-function get_transition_probability_rsp(next_state::Int, current_state::Int, neighbor_states::Vector{Int}, λmap::Matrix{Float64}, x::Int, y::Int)
-    # RSP transition model using ignition probability map at specific cell position
-    if next_state == 1  # NO_EVENT
-        if current_state == 1  # Currently NO_EVENT
-            # Stay NO_EVENT with high probability (no spontaneous birth)
-            return 0.8  # Reduced from 0.95 to allow more spontaneous birth
-        else  # Currently EVENT_PRESENT
-            # Death/decay to NO_EVENT
-            return 0.3  # Increased from 0.1 to allow more death (30% chance of death)
-        end
-    else  # EVENT_PRESENT
-        if current_state == 1  # Currently NO_EVENT
-            # Birth/spread to EVENT_PRESENT
-            # Consider neighbor influence and local ignition probability
-            active_neighbors = count(x -> x == 2, neighbor_states)  # Count EVENT_PRESENT neighbors
-            local_ignition = λmap[y, x]  # Local ignition probability from map
-            birth_prob = local_ignition * 0.3 + 0.2 * active_neighbors  # Increased coefficients
-            return min(0.8, birth_prob)  # Increased cap from 0.3 to 0.8
-        else  # Currently EVENT_PRESENT
-            # Stay EVENT_PRESENT with high probability
-            return 0.7  # Reduced from 0.9 to allow more death (30% chance of death)
-        end
+function get_transition_probability_rsp(next_state::Int, current_state::Int,
+                             nbr_states::Vector{Int};
+                             λ::Float64,
+                             β0::Float64,
+                             α::Float64,
+                             δ::Float64,
+                             μ::Float64)
+
+    active_nbrs = count(x -> x == 1, nbr_states)  # 1 = EVENT_PRESENT
+    if current_state == 0  # NO_EVENT
+        # ---- Birth / ignition ----
+        birth_p = clamp(β0 + λ + α * active_nbrs, 0.0, 1.0)
+        return next_state == 1 ? birth_p : 1.0 - birth_p
+    else  # current_state == 1 (EVENT_PRESENT)
+        # ---- Persistence or extinction ----
+        return next_state == 1 ? δ : (next_state == 0 ? μ : 0.0)
     end
 end
 

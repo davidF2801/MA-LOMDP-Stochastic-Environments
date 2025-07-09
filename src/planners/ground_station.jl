@@ -84,7 +84,6 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                     end
                 end
             end
-            
             update_global_belief!(gs_state.global_belief, observations, env)
             
             # Calculate contact horizon (steps until next sync)
@@ -155,7 +154,6 @@ function get_agent_observations_since_sync(agent, last_sync::Int, current_time::
         # No new observations since last sync
         return GridObservation[]
     end
-    
     # Get the most recent observations (last observations_since_sync observations)
     total_observations = length(agent.observation_history)
     start_index = max(1, total_observations - observations_since_sync + 1)

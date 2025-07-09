@@ -84,6 +84,7 @@ struct CircularTrajectory <: Trajectory
     center_y::Int
     radius::Float64
     period::Int
+    step_size::Float64
 end
 
 """
@@ -95,6 +96,7 @@ struct LinearTrajectory <: Trajectory
     end_x::Int
     end_y::Int
     period::Int
+    step_size::Float64
 end
 
 """

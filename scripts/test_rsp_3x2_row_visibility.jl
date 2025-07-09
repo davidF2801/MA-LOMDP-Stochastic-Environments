@@ -15,14 +15,14 @@ Plots.plotlyjs()
 using Infiltrator
 
 # Set random seed for reproducibility
-Random.seed!(42)
+#Random.seed!(42)
 
 # =============================================================================
 # CONFIGURATION PARAMETERS
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 50                # Total simulation steps
+const NUM_STEPS = 100               # Total simulation steps
 const PLANNING_MODE = :script         # Use macro-script planning
 
 # 🌍 ENVIRONMENT PARAMETERS
@@ -34,8 +34,8 @@ const SENSOR_RANGE = 0.0              # Sensor range for agents (0.0 = row-only 
 const DISCOUNT_FACTOR = 0.95          # POMDP discount factor
 
 # 📊 RSP PARAMETERS
-const IGNITION_PROBABILITY = 0.2       # Base ignition probability for λmap
-const DEATH_RATE = 0.3                 # Death rate for events (30% chance of death per timestep)
+const IGNITION_PROBABILITY = 0.01       # Base ignition probability for λmap
+const DEATH_RATE = 0.05                 # Death rate for events (30% chance of death per timestep)
 const BIRTH_RATE = 0.01                # Spontaneous birth rate
 
 # 🤖 AGENT PARAMETERS
@@ -48,6 +48,13 @@ const SENSOR_NOISE = 0.0              # Perfect observations
 const CONTACT_HORIZON = 3             # Steps until next sync opportunity
 const GROUND_STATION_X = 1            # Ground station X position
 const GROUND_STATION_Y = 1            # Ground station Y position
+
+# Add RSP parameter constants at the top
+const RSP_LAMBDA = 0.005
+const RSP_BETA0 = 0.005
+const RSP_ALPHA = 0.01
+const RSP_DELTA = 0.99
+const RSP_MU = 0.01
 
 # =============================================================================
 
@@ -135,11 +142,11 @@ function create_row_agents()
         # For a 3-row grid, we need to cycle through positions (1,1), (1,2), (1,3)
         if i == 1
             # Agent 1: starts in row 1, cycles 1→2→3→1→2→3...
-            trajectory = LinearTrajectory(1, 1, 1, 3, 3)  # Period = 3, moves from row 1 to row 3
+            trajectory = LinearTrajectory(1, 1, 1, 3, 3, 1.0)  # Period = 3, moves from row 1 to row 3
             phase_offset = 0  # Start at row 1
         else
             # Agent 2: starts in row 3, cycles 3→1→2→3→1→2...
-            trajectory = LinearTrajectory(1, 1, 1, 3, 3)  # Period = 3, moves from row 1 to row 3
+            trajectory = LinearTrajectory(1, 1, 1, 3, 3, 1.0)  # Period = 3, moves from row 1 to row 3
             phase_offset = 2  # Start at row 3 (phase offset of 2)
         end
         
@@ -177,12 +184,22 @@ function create_rsp_environment()
     env.dynamics = rsp  # Use RSP dynamics (enum value)
     env.ignition_prob = fill(IGNITION_PROBABILITY, GRID_HEIGHT, GRID_WIDTH)
     
+    # Add RSP parameters to environment
+    env.rsp_params = (
+        lambda=RSP_LAMBDA,
+        beta0=RSP_BETA0,
+        alpha=RSP_ALPHA,
+        delta=RSP_DELTA,
+        mu=RSP_MU
+    )
+    
     println("🌍 Created RSP test environment:")
     println("  Grid: $(GRID_WIDTH)x$(GRID_HEIGHT)")
     println("  Initial events: $(INITIAL_EVENTS)")
     println("  Max sensing targets: $(MAX_SENSING_TARGETS)")
     println("  Dynamics: RSP (Random Spread Process)")
     println("  Ignition probability: $(IGNITION_PROBABILITY)")
+    println("  RSP params: $(env.rsp_params)")
     
     return env
 end
@@ -202,51 +219,61 @@ function visualize_rsp_state(
     ground_station_pos::Tuple{Int, Int}=(GROUND_STATION_X, GROUND_STATION_Y)
 )
     height, width = size(environment_state)
-    
-    # Create plot
+    agent_colors = [:red, :green, :blue, :orange]  # Add more if needed
+
+    # Create a blank plot with correct limits and aspect
     p = plot(; xlim=(0.5, width+0.5), ylim=(0.5, height+0.5),
         aspect_ratio=:equal, size=(600, 800), legend=false,
         xlabel="X Coordinate", ylabel="Y Coordinate",
-        grid=true, gridalpha=0.3,
-        title="RSP 3x2 Test - Time Step $(time_step)\nEvents: $(count(==(EVENT_PRESENT), environment_state)) | Agents: $(length(agents))",
-        titlefontsize=12)
+        grid=false,
+        title="RSP 3x2 Test - Time Step $(time_step) Events: $(count(==(EVENT_PRESENT), environment_state)) | Agents: $(length(agents))",
+        titlefontsize=12,
+        background_color=:white
+    )
 
-    # Overlay: Row visibility as semi-transparent colored bands
-    agent_colors = [:red, :green]
+    # Draw grid cells as white squares with black borders
+    for x in 1:width, y in 1:height
+        xs = [x-0.5, x+0.5, x+0.5, x-0.5]
+        ys = [y-0.5, y-0.5, y+0.5, y+0.5]
+        plot!(p, xs, ys, seriestype=:shape, fillcolor=:white, linecolor=:black, linewidth=1, alpha=1, label=false)
+    end
+
+    # Overlay: FOR and action for each agent
     for (i, agent) in enumerate(agents)
-        row = agent.trajectory.start_y
-        # Draw row band
-        for col in 1:width
-            scatter!(p, [col], [row]; marker=:rect, markersize=40, color=agent_colors[i], alpha=0.15, label="")
+        color = agent_colors[i]
+        pos = get_agent_position_row_cycle(agent.id, time_step, agent.phase_offset)
+        # Get FOR cells
+        for_cells = get_row_field_of_regard(agent, pos, (width=width, height=height))
+        # Highlight FOR (light color)
+        for (x, y) in for_cells
+            xs = [x-0.5, x+0.5, x+0.5, x-0.5]
+            ys = [y-0.5, y-0.5, y+0.5, y+0.5]
+            plot!(p, xs, ys, seriestype=:shape, fillcolor=color, linecolor=:black, alpha=0.18, label=false)
+        end
+        # Highlight action (dark color)
+        if i <= length(actions) && !isempty(actions[i].target_cells)
+            for (x, y) in actions[i].target_cells
+                xs = [x-0.5, x+0.5, x+0.5, x-0.5]
+                ys = [y-0.5, y-0.5, y+0.5, y+0.5]
+                plot!(p, xs, ys, seriestype=:shape, fillcolor=color, linecolor=:black, alpha=0.5, label=false)
+            end
         end
     end
 
     # Overlay: Ground station as green star
-    scatter!(p, [ground_station_pos[1]], [ground_station_pos[2]]; marker=:star, markersize=14, color=:green, alpha=0.9, label="Ground Station")
+    scatter!(p, [ground_station_pos[1]], [ground_station_pos[2]]; marker=:star, markersize=14, color=:green, alpha=0.9, label=false)
 
     # Overlay: Agents as small circles
     for (i, agent) in enumerate(agents)
         pos = get_agent_position_row_cycle(agent.id, time_step, agent.phase_offset)
-        agent_color = agent_colors[mod(i-1, length(agent_colors))+1]
-        scatter!(p, [pos[1]], [pos[2]]; marker=:circle, markersize=10, color=agent_color, alpha=0.9, label="Agent $(agent.id)")
+        agent_color = agent_colors[i]
+        scatter!(p, [pos[1]], [pos[2]]; marker=:circle, markersize=10, color=agent_color, alpha=0.9, label=false)
     end
 
     # Overlay: Fire emoji for events
     for y in 1:height, x in 1:width
         if environment_state[y, x] == EVENT_PRESENT
             annotate!(p, x, y, text("🔥", :center, 18))
-        end
-    end
-
-    # Overlay: FOV (Field of View) as agent-specific colored cells
-    for (i, agent) in enumerate(agents)
-        if i <= length(actions) && !isempty(actions[i].target_cells)
-            fov_cells = actions[i].target_cells
-            for cell in fov_cells
-                x, y = cell
-                scatter!(p, [x], [y]; marker=:rect, markersize=32, color=agent_colors[i], alpha=0.4, label="")
-                annotate!(p, x, y, text("$(agent.id)", :center, 10, agent_colors[i]))
-            end
         end
     end
 
@@ -302,10 +329,94 @@ function create_rsp_animation(
     
     # Save animation
     animation_filename = joinpath(output_dir, "rsp_3x2_row_visibility.gif")
-    gif(anim, animation_filename, fps=2)
+    gif(anim, animation_filename, fps=0.5)  # Slower animation
     println("✓ Saved animation: $(basename(animation_filename))")
     
     return anim
+end
+
+# =============================================================================
+# EVENT TRACKING STRUCTURES
+# =============================================================================
+
+"""
+Event tracking structure to maintain unique event IDs and observation status
+"""
+mutable struct EventTracker
+    cell_active_event_id::Dict{Tuple{Int,Int}, Union{Nothing,Int}}  # Maps cell -> current active event ID
+    event_registry::Dict{Int, Dict}  # Maps event_id -> event info
+    next_event_id::Int  # Next available event ID
+end
+
+"""
+Initialize event tracker
+"""
+function initialize_event_tracker()
+    return EventTracker(
+        Dict{Tuple{Int,Int}, Union{Nothing,Int}}(),
+        Dict{Int, Dict}(),
+        1
+    )
+end
+
+"""
+Update event tracking for a timestep
+"""
+function update_event_tracking!(tracker::EventTracker, prev_environment::Matrix{EventState}, 
+                               curr_environment::Matrix{EventState}, timestep::Int)
+    height, width = size(curr_environment)
+    
+    for y in 1:height, x in 1:width
+        cell = (x, y)
+        prev_state = prev_environment[y, x]
+        curr_state = curr_environment[y, x]
+        
+        if prev_state == NO_EVENT && curr_state == EVENT_PRESENT
+            # New event started
+            event_id = tracker.next_event_id
+            tracker.cell_active_event_id[cell] = event_id
+            tracker.event_registry[event_id] = Dict(
+                :cell => cell,
+                :start_time => timestep,
+                :observed => false,
+                :end_time => nothing
+            )
+            tracker.next_event_id += 1
+            
+        elseif prev_state == EVENT_PRESENT && curr_state == NO_EVENT
+            # Event ended
+            event_id = tracker.cell_active_event_id[cell]
+            if event_id !== nothing
+                tracker.event_registry[event_id][:end_time] = timestep
+                tracker.cell_active_event_id[cell] = nothing
+            end
+        end
+    end
+end
+
+"""
+Mark events as observed based on agent observations
+"""
+function mark_observed_events!(tracker::EventTracker, agent_observations::Vector{Tuple{Int, Vector{Tuple{Tuple{Int,Int}, EventState}}}})
+    for (agent_id, observations) in agent_observations
+        for (cell, observed_state) in observations
+            if observed_state == EVENT_PRESENT
+                event_id = tracker.cell_active_event_id[cell]
+                if event_id !== nothing
+                    tracker.event_registry[event_id][:observed] = true
+                end
+            end
+        end
+    end
+end
+
+"""
+Get event statistics from tracker
+"""
+function get_event_statistics(tracker::EventTracker)
+    total_events = length(tracker.event_registry)
+    observed_events = count(e -> e[:observed], values(tracker.event_registry))
+    return total_events, observed_events
 end
 
 # =============================================================================
@@ -342,8 +453,8 @@ function simulate_rsp_environment(env, num_steps::Int)
     for step in 1:num_steps
         new_state = similar(current_state)
         
-        # Use RSP transition
-        transition_rsp!(new_state, current_state, env.ignition_prob, Random.GLOBAL_RNG)
+        # Use RSP transition, passing RSP parameters from env
+        transition_rsp!(new_state, current_state, env.ignition_prob, Random.GLOBAL_RNG; rsp_params=env.rsp_params)
         
         current_state = new_state
         push!(evolution, copy(current_state))
@@ -370,9 +481,18 @@ function simulate_rsp_environment(env, num_steps::Int)
                 end
             end
             
-            prob_no_event = get_transition_probability_rsp(1, current_cell_state, neighbor_states, env.ignition_prob, x, y)
-            prob_event = get_transition_probability_rsp(2, current_cell_state, neighbor_states, env.ignition_prob, x, y)
-            
+            prob_no_event = get_transition_probability_rsp(1, current_cell_state, neighbor_states;
+                λ=env.rsp_params.lambda,
+                β0=env.rsp_params.beta0,
+                α=env.rsp_params.alpha,
+                δ=env.rsp_params.delta,
+                μ=env.rsp_params.mu)
+            prob_event = get_transition_probability_rsp(2, current_cell_state, neighbor_states;
+                λ=env.rsp_params.lambda,
+                β0=env.rsp_params.beta0,
+                α=env.rsp_params.alpha,
+                δ=env.rsp_params.delta,
+                μ=env.rsp_params.mu)
             println("  Current state: $(current_cell_state == 1 ? "NO_EVENT" : "EVENT_PRESENT")")
             println("  Active neighbors: $(count(x -> x == 2, neighbor_states))")
             println("  P(NO_EVENT): $(round(prob_no_event, digits=3))")
@@ -402,20 +522,27 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
     # Initialize ground station
     gs_state = GroundStation.initialize_ground_station(env, agents, num_states=2)
     
+    # Initialize event tracker
+    event_tracker = initialize_event_tracker()
+    
     # Track performance metrics
     sync_events = []
-    observed_events = Set{Tuple{Int, Tuple{Int, Int}}}()
-    all_events_ever_appeared = Set{Tuple{Int, Tuple{Int, Int}}}()
     
     # Track environment and actions for visualization
     environment_evolution = Matrix{EventState}[]
     action_history = Vector{Vector{SensingAction}}()
-    
+
     # Get initial environment state
     initial_state_dist = POMDPs.initialstate(env)
     current_state = rand(initial_state_dist)
     current_environment = current_state.event_map
+
+    # Initialize previous environment state for event tracking
+    prev_environment = copy(current_environment)
     
+    # Update event tracking for initial state (t=0)
+    update_event_tracking!(event_tracker, fill(NO_EVENT, GRID_HEIGHT, GRID_WIDTH), current_environment, 0)
+
     println("\n📊 Starting simulation...")
     
     for t in 0:(num_steps-1)
@@ -438,12 +565,15 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
         
         # Execute agent actions
         joint_actions = SensingAction[]
+        agent_observations = Vector{Tuple{Int, Vector{Tuple{Tuple{Int,Int}, EventState}}}}()
         
         for agent in agents
             # Get plan from ground station and execute it
             plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
             action = execute_plan(agent, plan, plan_type, agent.observation_history)
+            @infiltrate
             push!(joint_actions, action)
+            
             # Use POMDP interface to get observations
             if !isempty(action.target_cells)
                 # Get observation using POMDP observation model
@@ -451,42 +581,49 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
                 observation = rand(observation_dist)
                 push!(agent.observation_history, observation)
                 
-                # Track observed events for reward calculation
+                # Collect observations for event tracking
+                observations = Vector{Tuple{Tuple{Int,Int}, EventState}}()
                 for (i, cell) in enumerate(observation.sensed_cells)
-                    if i <= length(observation.event_states) && observation.event_states[i] == EVENT_PRESENT
-                        push!(observed_events, (t, cell))  # Track (timestep, cell) to count multiple observations
+                    if i <= length(observation.event_states)
+                        push!(observations, (cell, observation.event_states[i]))
                     end
                 end
+                push!(agent_observations, (agent.id, observations))
                 
                 # Debug: print what was observed
                 events_found = count(==(EVENT_PRESENT), observation.event_states)
                 println("  Agent $(agent.id): $(length(action.target_cells)) cells sensed, $(events_found) events found")
             else
+                # Wait action - create empty observation
+                empty_observation = GridObservation(agent.id, Tuple{Int,Int}[], EventState[], [])
+                push!(agent.observation_history, empty_observation)
                 println("  Agent $(agent.id): wait action")
             end
         end
         
-        # Track events that appeared in this step
-        for y in 1:GRID_HEIGHT, x in 1:GRID_WIDTH
-            if current_environment[y, x] == EVENT_PRESENT
-                push!(all_events_ever_appeared, (t, (x, y)))  # Track (timestep, cell) to count multiple events
-            end
-        end
+        # Mark events as observed based on current observations
+        mark_observed_events!(event_tracker, agent_observations)
         
         # Record environment state and actions for visualization
         push!(environment_evolution, copy(current_environment))
         push!(action_history, joint_actions)
+        
         # Update environment using POMDP transition (handles both environment and agent movement)
         if t < num_steps - 1
             # Use POMDP transition to update both environment and agent positions
             transition_dist = POMDPs.transition(env, current_state, SensingAction(1, [], false))  # Dummy action for transition
             current_state = rand(transition_dist)
             current_environment = current_state.event_map
+            
+            # Update event tracking for the new timestep
+            update_event_tracking!(event_tracker, prev_environment, current_environment, t + 1)
+            prev_environment .= current_environment
         end
         
         # Print status every few steps
         if t % 5 == 0
-            println("📊 Status: $(count(==(EVENT_PRESENT), current_environment)) events active")
+            total_events, observed_events = get_event_statistics(event_tracker)
+            println("📊 Status: $(count(==(EVENT_PRESENT), current_environment)) events active, $(total_events) total events, $(observed_events) observed")
         end
         
         # Debug: print agent positions
@@ -497,20 +634,24 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
         end
     end
     
-    # Calculate final reward metric
-    total_events_appeared = length(all_events_ever_appeared)  # Count of (timestep, cell) pairs where events appeared
-    total_events_observed = length(observed_events)  # Count of (timestep, cell) pairs where events were observed
-    event_observation_percentage = total_events_appeared > 0 ? (total_events_observed / total_events_appeared) * 100.0 : 0.0
+    # Calculate final statistics
+    total_events, observed_events = get_event_statistics(event_tracker)
+    event_observation_percentage = total_events > 0 ? (observed_events / total_events) * 100.0 : 0.0
     
     # Print final results
     println("\n📈 RSP Simulation Results")
     println("=========================")
     println("Event Observation Performance:")
-    println("  Total events that appeared: $(total_events_appeared)")
-    println("  Total events observed: $(total_events_observed)")
+    println("  Total unique events that appeared: $(total_events)")
+    println("  Total unique events observed: $(observed_events)")
     println("  Event observation percentage: $(round(event_observation_percentage, digits=1))%")
-    println("  Unique cells with events: $(length(Set([cell for (_, cell) in all_events_ever_appeared])))")
-    println("  Unique cells observed: $(length(Set([cell for (_, cell) in observed_events])))")
+    println("")
+    println("Event Details:")
+    for (event_id, event_info) in event_tracker.event_registry
+        status = event_info[:observed] ? "✅ OBSERVED" : "❌ MISSED"
+        end_time_str = event_info[:end_time] !== nothing ? "$(event_info[:end_time])" : "ongoing"
+        println("  Event $(event_id): cell $(event_info[:cell]), time $(event_info[:start_time])-$(end_time_str), $(status)")
+    end
     println("")
     println("System Performance:")
     println("  Total sync events: $(length(sync_events))")
@@ -529,7 +670,7 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
     println("📁 Check the 'visualizations' folder for:")
     println("  - rsp_3x2_row_visibility.gif (main simulation animation)")
     
-    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history
+    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history, event_tracker
 end
 
 # =============================================================================
@@ -548,24 +689,24 @@ println("  Row-only visibility: true")
 # Test RSP environment evolution first
 println("\n🔥 Testing RSP Environment Evolution...")
 env = create_rsp_environment()
-test_evolution = simulate_rsp_environment(env, 5)
-println("✅ RSP environment evolution test completed!")
+# test_evolution = simulate_rsp_environment(env, 5)
+# println("✅ RSP environment evolution test completed!")
 
-# Test trajectory calculations
-println("\n🧭 Testing Trajectory Calculations...")
-agents = env.agents
-for agent in agents
-    println("Agent $(agent.id): trajectory=$(agent.trajectory), phase_offset=$(agent.phase_offset)")
-    println("Expected cycle: Agent $(agent.id) should cycle through rows $(agent.id == 1 ? "1→2→3→1→2→3..." : "3→1→2→3→1→2...")")
-    for t in 0:9
-        pos = get_agent_position_row_cycle(agent.id, t, agent.phase_offset)
-        println("  Time $(t): $(pos)")
-    end
-end
-println("✅ Trajectory test completed!")
+# # Test trajectory calculations
+# println("\n🧭 Testing Trajectory Calculations...")
+# agents = env.agents
+# for agent in agents
+#     println("Agent $(agent.id): trajectory=$(agent.trajectory), phase_offset=$(agent.phase_offset)")
+#     println("Expected cycle: Agent $(agent.id) should cycle through rows $(agent.id == 1 ? "1→2→3→1→2→3..." : "3→1→2→3→1→2...")")
+#     for t in 0:9
+#         pos = get_agent_position_row_cycle(agent.id, t, agent.phase_offset)
+#         println("  Time $(t): $(pos)")
+#     end
+# end
+# println("✅ Trajectory test completed!")
 
 # Run the simulation
-gs_state, agents, percentage, sync_events, env_evolution, action_history = simulate_rsp_async_planning()
+gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker = simulate_rsp_async_planning()
 
 println("\n✅ RSP test completed!")
 println("📊 Final event observation percentage: $(round(percentage, digits=1))%") 
