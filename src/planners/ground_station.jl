@@ -27,8 +27,10 @@ import ..Types.EventState2, ..Types.NO_EVENT_2, ..Types.EVENT_PRESENT_2
 # Import EventDynamicsModule functions through Environment
 import ..Environment.EventDynamicsModule.DBNTransitionModel2, ..Environment.EventDynamicsModule.predict_next_belief_dbn
 import ..Agents.BeliefManagement: update_cell_distribution, get_neighbor_event_probabilities
-import ..Agents.BeliefManagement: predict_belief_rsp
+import ..Agents.BeliefManagement: predict_belief_rsp, evolve_no_obs, collapse_belief_to
 import ..Environment.EventDynamicsModule: rsp_transition_probs
+# Import functions from MacroPlannerAsync
+import .MacroPlannerAsync: initialize_uniform_belief, get_known_observations_at_time, has_known_observation, get_known_observation
 
 export maybe_sync!, GroundStationState, update_global_belief_rsp!, precompute_worlds!
 
@@ -84,7 +86,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                     end
                 end
             end
-            update_global_belief!(gs_state.global_belief, observations, env)
+            update_global_belief!(gs_state.global_belief, observations, env, gs_state, t)
             
             # Calculate contact horizon (steps until next sync)
             C_i = calculate_contact_horizon(agent, t, env)
@@ -168,10 +170,10 @@ function get_agent_observations_since_sync(agent, last_sync::Int, current_time::
 end
 
 """
-Update global belief with new observations using proper Bayesian updating
-Processes observations chronologically and applies transition models to unobserved cells
+Update global belief with new observations using the same logic as macro planner async
+Updates belief till t_clean (last time where all observation outcomes are known)
 """
-function update_global_belief!(global_belief, observations::Vector{GridObservation}, env)
+function update_global_belief!(global_belief, observations::Vector{GridObservation}, env, gs_state::GroundStationState, current_time::Int)
     if isempty(observations)
         println("🔄 No new observations to update global belief")
         return
@@ -179,114 +181,36 @@ function update_global_belief!(global_belief, observations::Vector{GridObservati
     
     println("🔄 Updating global belief with $(length(observations)) observations")
     
-    # Create DBN transition model for belief propagation
-    dbn_model = DBNTransitionModel2(env.event_dynamics)
+    # Step 1: Determine the last time where all observation outcomes are known
+    tau = gs_state.agent_last_sync  # Last sync times of all agents
+    t_clean = minimum([tau[j] for j in keys(tau)])
     
-    # Get current belief distributions
-    current_distributions = copy(global_belief.event_distributions)
-    num_states, height, width = size(current_distributions)
+    println("  📊 t_clean = $(t_clean) (last time where all observation outcomes are known)")
     
-    # Process observations chronologically (they should be in order from get_agent_observations_since_sync)
-    for (obs_idx, observation) in enumerate(observations)
-        agent_id = observation.agent_id
-        sensed_cells = observation.sensed_cells
-        event_states = observation.event_states
+    # Step 2: Roll forward deterministically from uniform belief to t_clean using known observations
+    # Start with uniform belief distribution (we knew nothing at t=0)
+    B = initialize_uniform_belief(env)
+    
+    for t in 0:(t_clean-1)
+        B = evolve_no_obs(B, env)  # Contagion-aware update
         
-        println("  📡 Processing observation $(obs_idx): Agent $(agent_id) observed $(length(sensed_cells)) cells")
-        
-        # First, apply transition model to ALL cells (simulate environment evolution)
-        # This represents what happens between observations
-        new_distributions = similar(current_distributions)
-        
-        for y in 1:height
-            for x in 1:width
-                # Get neighbor beliefs for transition model
-                neighbor_event_probs = get_neighbor_event_probabilities(current_distributions, x, y)
-                
-                # Apply DBN transition model to predict next belief for each state
-                current_cell_dist = current_distributions[:, y, x]
-                new_cell_dist = similar(current_cell_dist)
-                
-                # Simplified transition model for multi-state belief
-                E_neighbors = sum(neighbor_event_probs)
-                
-                # State transitions based on number of states
-                if num_states == 2
-                    # Simple 2-state model: NO_EVENT ↔ EVENT_PRESENT
-                    new_cell_dist[1] = current_cell_dist[1] * (1.0 - env.event_dynamics.birth_rate - env.event_dynamics.neighbor_influence * E_neighbors) +
-                                       current_cell_dist[2] * env.event_dynamics.death_rate
-                    
-                    new_cell_dist[2] = current_cell_dist[1] * (env.event_dynamics.birth_rate + env.event_dynamics.neighbor_influence * E_neighbors) +
-                                       current_cell_dist[2] * (1.0 - env.event_dynamics.death_rate)
-                elseif num_states == 4
-                    # 4-state model: NO_EVENT → EVENT_PRESENT → EVENT_SPREADING → EVENT_DECAYING → NO_EVENT
-                    new_cell_dist[1] = current_cell_dist[1] * (1.0 - env.event_dynamics.birth_rate - env.event_dynamics.neighbor_influence * E_neighbors) +
-                                       current_cell_dist[2] * env.event_dynamics.death_rate +
-                                       current_cell_dist[4] * env.event_dynamics.decay_rate
-                    
-                    new_cell_dist[2] = current_cell_dist[1] * (env.event_dynamics.birth_rate + env.event_dynamics.neighbor_influence * E_neighbors) +
-                                       current_cell_dist[2] * (1.0 - env.event_dynamics.death_rate - env.event_dynamics.spread_rate) +
-                                       current_cell_dist[3] * env.event_dynamics.decay_rate
-                    
-                    new_cell_dist[3] = current_cell_dist[2] * env.event_dynamics.spread_rate +
-                                       current_cell_dist[3] * (1.0 - env.event_dynamics.decay_rate)
-                    
-                    new_cell_dist[4] = current_cell_dist[3] * env.event_dynamics.decay_rate +
-                                       current_cell_dist[4] * (1.0 - env.event_dynamics.decay_rate)
-                else
-                    # Default: simple 2-state model
-                    new_cell_dist[1] = current_cell_dist[1] * (1.0 - env.event_dynamics.birth_rate - env.event_dynamics.neighbor_influence * E_neighbors) +
-                                       current_cell_dist[2] * env.event_dynamics.death_rate
-                    
-                    new_cell_dist[2] = current_cell_dist[1] * (env.event_dynamics.birth_rate + env.event_dynamics.neighbor_influence * E_neighbors) +
-                                       current_cell_dist[2] * (1.0 - env.event_dynamics.death_rate)
-                end
-                
-                # Normalize
-                total = sum(new_cell_dist)
-                if total > 0
-                    new_cell_dist ./= total
-                end
-                
-                new_distributions[:, y, x] = new_cell_dist
-            end
-        end
-        
-        # Update current distributions with transition results
-        current_distributions = new_distributions
-        
-        # Now apply perfect observations for observed cells
-        for (i, cell) in enumerate(sensed_cells)
-            if i <= length(event_states)
-                event_state = event_states[i]
-                x, y = cell
-                
-                if 1 <= x <= width && 1 <= y <= height
-                    # Get prior distribution (after transition)
-                    prior_distribution = current_distributions[:, y, x]
-                    
-                    # Apply perfect observation: belief collapses to certainty
-                    updated_distribution = update_cell_distribution(prior_distribution, event_state)
-                    current_distributions[:, y, x] = updated_distribution
-                    
-                    # Print update information
-                    if length(prior_distribution) >= 2
-                        prior_event_prob = sum(prior_distribution[2:end])
-                        posterior_event_prob = sum(updated_distribution[2:end])
-                    else
-                        prior_event_prob = 0.0
-                        posterior_event_prob = 0.0
-                    end
-                    println("    🎯 Cell ($(x),$(y)): $(event_state) observed, belief collapsed from $(round(prior_event_prob, digits=3)) to $(round(posterior_event_prob, digits=3))")
+        # Apply known observations (perfect observations)
+        for (agent_j, action_j) in get_known_observations_at_time(t, gs_state)
+            for cell in action_j.target_cells
+                if has_known_observation(t, cell, gs_state)
+                    observed_value = get_known_observation(t, cell, gs_state)
+                    B = collapse_belief_to(B, cell, observed_value)
                 end
             end
         end
     end
     
-    # Update the global belief with final distributions
-    global_belief.event_distributions = current_distributions
+    # Update the global belief with the belief at t_clean
+    global_belief.event_distributions = B.event_distributions
+    global_belief.uncertainty_map = B.uncertainty_map
+    global_belief.last_update = t_clean
     
-    println("✅ Global belief updated with proper Bayesian inference")
+    println("✅ Global belief updated till t_clean = $(t_clean)")
 end
 
 """

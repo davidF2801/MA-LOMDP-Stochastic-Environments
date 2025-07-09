@@ -31,7 +31,7 @@ const GRID_HEIGHT = 3                 # Grid height (rows)
 const INITIAL_EVENTS = 1              # Number of initial events
 const MAX_SENSING_TARGETS = 1         # Maximum cells an agent can sense per step
 const SENSOR_RANGE = 0.0              # Sensor range for agents (0.0 = row-only visibility)
-const DISCOUNT_FACTOR = 0.95          # POMDP discount factor
+const DISCOUNT_FACTOR = 0.95        # POMDP discount factor
 
 # 📊 RSP PARAMETERS
 const IGNITION_PROBABILITY = 0.01       # Base ignition probability for λmap
@@ -52,9 +52,9 @@ const GROUND_STATION_Y = 1            # Ground station Y position
 # Add RSP parameter constants at the top
 const RSP_LAMBDA = 0.005
 const RSP_BETA0 = 0.005
-const RSP_ALPHA = 0.01
-const RSP_DELTA = 0.99
-const RSP_MU = 0.01
+const RSP_ALPHA = 0.05
+const RSP_DELTA = 0.8
+const RSP_MU = 0.2
 
 # =============================================================================
 
@@ -335,6 +335,144 @@ function create_rsp_animation(
     return anim
 end
 
+"""
+Create uncertainty visualizations including uncertainty map animation and uncertainty over time plot
+"""
+function create_uncertainty_visualizations(
+    uncertainty_evolution::Vector{Matrix{Float64}},
+    average_uncertainty_per_timestep::Vector{Float64},
+    environment_evolution::Vector{Matrix{EventState}},
+    num_steps::Int
+)
+    println("📊 Creating uncertainty visualizations...")
+    
+    # Create output directory
+    output_dir = "visualizations"
+    if !isdir(output_dir)
+        mkdir(output_dir)
+    end
+    
+    # 1. Create uncertainty over time plot
+    println("  📈 Creating uncertainty over time plot...")
+    time_points = 1:length(average_uncertainty_per_timestep)
+    
+    uncertainty_plot = plot(
+        time_points, 
+        average_uncertainty_per_timestep, 
+        seriestype=:line,
+        color=:blue,
+        linewidth=2,
+        marker=:circle,
+        markersize=4,
+        title="Average Uncertainty Over Time",
+        xlabel="Time Step",
+        ylabel="Average Uncertainty (Entropy)",
+        legend=false,
+        grid=true,
+        size=(800, 600)
+    )
+    
+    # Add horizontal line for uniform distribution entropy (log(2) ≈ 0.693)
+    hline!([0.693], color=:red, linestyle=:dash, linewidth=1, label="Uniform Distribution")
+    
+    # Save the plot
+    plot_filename = joinpath(output_dir, "rsp_3x2_uncertainty_evolution.png")
+    savefig(uncertainty_plot, plot_filename)
+    println("  ✓ Saved uncertainty plot: $(basename(plot_filename))")
+    
+    # 2. Create uncertainty map animation
+    println("  🎬 Creating uncertainty map animation...")
+    
+    # Find the range of uncertainty values for consistent coloring
+    all_uncertainties = vcat([vec(u) for u in uncertainty_evolution]...)
+    min_uncertainty = minimum(all_uncertainties)
+    max_uncertainty = maximum(all_uncertainties)
+    
+    # Create frames for uncertainty animation
+    uncertainty_frames = []
+    
+    for (step, uncertainty_map) in enumerate(uncertainty_evolution)
+        frame = heatmap(
+            uncertainty_map,
+            colormap=:plasma,
+            colorrange=(min_uncertainty, max_uncertainty),
+            title="Uncertainty Map (t=$(step))",
+            xlabel="X",
+            ylabel="Y",
+            aspect_ratio=:equal,
+            size=(600, 400),
+            colorbar_title="Uncertainty (Entropy)"
+        )
+        push!(uncertainty_frames, frame)
+    end
+    
+    # Create animation
+    uncertainty_anim = @animate for frame in uncertainty_frames
+        plot(frame)
+    end
+    
+    # Save animation
+    uncertainty_animation_filename = joinpath(output_dir, "rsp_3x2_uncertainty_animation.gif")
+    gif(uncertainty_anim, uncertainty_animation_filename, fps=1)
+    println("  ✓ Saved uncertainty animation: $(basename(uncertainty_animation_filename))")
+    
+    # 3. Create combined visualization with environment and uncertainty side by side
+    println("  🎨 Creating combined environment + uncertainty animation...")
+    
+    combined_frames = []
+    
+    for step in 1:min(length(uncertainty_evolution), length(environment_evolution))
+        # Create subplot with environment and uncertainty
+        p = plot(
+            layout=(1, 2),
+            size=(1200, 500),
+            title="RSP Simulation - Time Step $(step)"
+        )
+        
+        # Environment subplot
+        env_state = environment_evolution[step]
+        env_plot = heatmap(
+            env_state,
+            colormap=:viridis,
+            colorrange=(0, 1),
+            title="Environment State",
+            xlabel="X",
+            ylabel="Y",
+            aspect_ratio=:equal,
+            colorbar_title="Event State"
+        )
+        
+        # Uncertainty subplot
+        uncertainty_map = uncertainty_evolution[step]
+        uncertainty_plot = heatmap(
+            uncertainty_map,
+            colormap=:plasma,
+            colorrange=(min_uncertainty, max_uncertainty),
+            title="Uncertainty Map",
+            xlabel="X",
+            ylabel="Y",
+            aspect_ratio=:equal,
+            colorbar_title="Uncertainty (Entropy)"
+        )
+        
+        # Combine plots
+        combined_plot = plot(env_plot, uncertainty_plot, layout=(1, 2))
+        push!(combined_frames, combined_plot)
+    end
+    
+    # Create combined animation
+    combined_anim = @animate for frame in combined_frames
+        plot(frame)
+    end
+    
+    # Save combined animation
+    combined_animation_filename = joinpath(output_dir, "rsp_3x2_combined_evolution.gif")
+    gif(combined_anim, combined_animation_filename, fps=1)
+    println("  ✓ Saved combined animation: $(basename(combined_animation_filename))")
+    
+    println("✅ All uncertainty visualizations created!")
+end
+
 # =============================================================================
 # EVENT TRACKING STRUCTURES
 # =============================================================================
@@ -531,6 +669,10 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
     # Track environment and actions for visualization
     environment_evolution = Matrix{EventState}[]
     action_history = Vector{Vector{SensingAction}}()
+    
+    # Track uncertainty evolution for visualization
+    uncertainty_evolution = Matrix{Float64}[]
+    average_uncertainty_per_timestep = Float64[]
 
     # Get initial environment state
     initial_state_dist = POMDPs.initialstate(env)
@@ -571,7 +713,6 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
             # Get plan from ground station and execute it
             plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
             action = execute_plan(agent, plan, plan_type, agent.observation_history)
-            @infiltrate
             push!(joint_actions, action)
             
             # Use POMDP interface to get observations
@@ -607,6 +748,18 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
         # Record environment state and actions for visualization
         push!(environment_evolution, copy(current_environment))
         push!(action_history, joint_actions)
+        
+        # Record uncertainty state for visualization
+        if gs_state.global_belief !== nothing
+            push!(uncertainty_evolution, copy(gs_state.global_belief.uncertainty_map))
+            avg_uncertainty = mean(gs_state.global_belief.uncertainty_map)
+            push!(average_uncertainty_per_timestep, avg_uncertainty)
+        else
+            # If no global belief yet, use uniform uncertainty
+            uniform_uncertainty = fill(0.693, GRID_HEIGHT, GRID_WIDTH)  # log(2) for uniform distribution
+            push!(uncertainty_evolution, uniform_uncertainty)
+            push!(average_uncertainty_per_timestep, 0.693)
+        end
         
         # Update environment using POMDP transition (handles both environment and agent movement)
         if t < num_steps - 1
@@ -666,11 +819,17 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
     # Create simulation animation
     anim = create_rsp_animation(agents, num_steps, environment_evolution, action_history, (GROUND_STATION_X, GROUND_STATION_Y))
     
+    # Create uncertainty visualization
+    println("\n📊 Creating Uncertainty Visualizations...")
+    create_uncertainty_visualizations(uncertainty_evolution, average_uncertainty_per_timestep, environment_evolution, num_steps)
+    
     println("\n✅ RSP simulation completed!")
     println("📁 Check the 'visualizations' folder for:")
     println("  - rsp_3x2_row_visibility.gif (main simulation animation)")
+    println("  - rsp_3x2_uncertainty_evolution.png (uncertainty over time)")
+    println("  - rsp_3x2_uncertainty_animation.gif (uncertainty map animation)")
     
-    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history, event_tracker
+    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history, event_tracker, uncertainty_evolution, average_uncertainty_per_timestep
 end
 
 # =============================================================================
@@ -706,7 +865,8 @@ env = create_rsp_environment()
 # println("✅ Trajectory test completed!")
 
 # Run the simulation
-gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker = simulate_rsp_async_planning()
+gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, avg_uncertainty = simulate_rsp_async_planning()
 
 println("\n✅ RSP test completed!")
-println("📊 Final event observation percentage: $(round(percentage, digits=1))%") 
+println("📊 Final event observation percentage: $(round(percentage, digits=1))%")
+println("📊 Final average uncertainty: $(round(avg_uncertainty[end], digits=3))") 
