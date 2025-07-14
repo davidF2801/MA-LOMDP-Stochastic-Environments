@@ -309,26 +309,8 @@ end
 Get agent's current position based on the agent's trajectory cycle phase
 """
 function get_agent_position(agent, env)
-    # Calculate position directly using trajectory and phase offset
     t = get_current_time(env, agent)
-    
-    # Apply phase offset
-    adjusted_time = t + agent.phase_offset
-    
-    # Calculate position based on trajectory type
-    if typeof(agent.trajectory) <: CircularTrajectory
-        angle = 2π * (adjusted_time % agent.trajectory.period) / agent.trajectory.period
-        x = agent.trajectory.center_x + round(Int, agent.trajectory.radius * cos(angle))
-        y = agent.trajectory.center_y + round(Int, agent.trajectory.radius * sin(angle))
-        return (x, y)
-    elseif typeof(agent.trajectory) <: LinearTrajectory
-        t_normalized = (adjusted_time % agent.trajectory.period) / agent.trajectory.period
-        x = round(Int, agent.trajectory.start_x + t_normalized * (agent.trajectory.end_x - agent.trajectory.start_x))
-        y = round(Int, agent.trajectory.start_y + t_normalized * (agent.trajectory.end_y - agent.trajectory.start_y))
-        return (x, y)
-    else
-        return (1, 1)  # fallback
-    end
+    return get_position_at_time(agent.trajectory, t, agent.phase_offset)
 end
 
 # Helper to get the current time step for the agent (assume env has a time_step or pass as argument)

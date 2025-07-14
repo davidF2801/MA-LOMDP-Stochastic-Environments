@@ -23,39 +23,45 @@ import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefMa
        ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.product,
        ..Agents.BeliefManagement.normalize_belief_distributions, ..Agents.BeliefManagement.collapse_belief_to,
        ..Agents.BeliefManagement.enumerate_all_possible_outcomes, ..Agents.BeliefManagement.merge_equivalent_beliefs,
-       ..Agents.BeliefManagement.calculate_cell_entropy, ..Agents.BeliefManagement.get_event_probability
+       ..Agents.BeliefManagement.calculate_cell_entropy, ..Agents.BeliefManagement.get_event_probability,
+       ..Agents.BeliefManagement.clear_belief_evolution_cache!, ..Agents.BeliefManagement.get_cache_stats
 # Remove circular imports - these functions will be available through the environment
 
 export best_script, evaluate_action_sequence_exact, calculate_macro_script_reward
 
 """
 best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state)::Vector{SensingAction}
+  – Pre-compute belief branches up to t_clean (independent of action sequences)
   – Enumerate every |A|^C open-loop action sequence for `agent`.
   – For each sequence:
-        • Roll out C steps:  (simulate using env.transition & env.observation)
-        • Propagate local belief only with *predicted* observations
-          (use expectation, i.e. marginalise over obs distribution).
+        • Evaluate using pre-computed belief branches
+        • Simulate macro-script from tau_i forward (agent i)
         • Plug reward = ∑ γ^k R( … )   [use existing reward() helper]
         • For other agents use `other_scripts[k]` (deterministic vector passed in)
   – Return argmax sequence (ties → first).
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG)
+    # Clear belief evolution cache at the start of each planning session
+    clear_belief_evolution_cache!()
+    
     # Enumerate all possible action sequences of length C considering trajectory
     action_sequences = generate_action_sequences(agent, env, C)
-    
+    # if agent.id == 2
+    #     @infiltrate
+    # end
     if isempty(action_sequences)
         return SensingAction[]
     end
     
+    # Step 1 & 2: Pre-compute belief branches up to t_clean (independent of action sequences)
+    println("🔄 Pre-computing belief branches for agent $(agent.id)...")
+    B_branches = precompute_belief_branches(env, agent, gs_state)
     best_sequence = SensingAction[]  # Default to empty sequence
     best_value = -Inf
-    
     println("🔍 Evaluating $(length(action_sequences)) action sequences for agent $(agent.id)")
-    
     for (i, sequence) in enumerate(action_sequences)
-        #rintln("Evaluating sequence $(i) of $(length(action_sequences))")
-        # Evaluate this sequence using exact enumeration if worlds are pre-computed
-        value = evaluate_action_sequence_exact(env, belief, agent, sequence, other_scripts, C, gs_state, rng)
+        # Evaluate this sequence using pre-computed belief branches
+        value = calculate_macro_script_reward(sequence, other_scripts, C, env, agent, B_branches, gs_state)
         
         if value > best_value
             best_value = value
@@ -67,6 +73,10 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     end
     
     println("✅ Best sequence found with value: $(round(best_value, digits=3))")
+    
+    # Report cache statistics
+    cache_stats = get_cache_stats()
+    println("📊 Cache statistics: $(cache_stats[:hits]) hits, $(cache_stats[:misses]) misses, $(round(cache_stats[:hit_rate] * 100, digits=1))% hit rate")
     return best_sequence
 end
 
@@ -81,7 +91,7 @@ function generate_action_sequences(agent, env, C::Int)
     # 1. Propagate agent trajectory for C timesteps
     trajectory_positions = Vector{Tuple{Int, Int}}()
     for t in 0:(C-1)
-        pos = get_agent_position_at_time(agent, env, t)
+        pos = get_position_at_time(agent.trajectory, t)
         push!(trajectory_positions, pos)
     end
     
@@ -298,27 +308,39 @@ function get_field_of_regard_at_position(agent, position, env)
 end
 
 """
-Evaluate a single action sequence using exact belief evolution
+Pre-compute belief branches up to t_clean (Steps 1 & 2 of the algorithm)
+This is independent of the specific action sequence being evaluated
 """
-function evaluate_action_sequence_exact(env, belief₀, agent, seq, other_scripts, C, gs_state, rng::AbstractRNG)
-    # For exact evaluation, we don't use pre-enumerated worlds
-    # Instead, we directly simulate belief evolution using the Díaz-Avalos formula
-    return calculate_macro_script_reward(seq, other_scripts, C, env, agent, belief₀, gs_state)
-end
-
-"""
-Calculate reward for a macro-script using exact asynchronous belief evolution
-"""
-function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts, C::Int, env, agent, belief₀, gs_state)
-    γ = env.discount
-    c_obs = 0.0 # Cost of performing an observation
-    
+function precompute_belief_branches(env, agent, gs_state)
     # Step 1: Determine the last time where all observation outcomes are known
     tau_i = gs_state.time_step  # Current sync time of agent i
     tau = gs_state.agent_last_sync  # Last sync times of all agents
-    t_clean = minimum([tau[j] for j in keys(tau) if j != agent.id])
     
-    # Step 2: Roll forward deterministically from uniform belief to t_clean using known observations
+    # Handle initial case: if any agent hasn't synced yet (last_sync = -1), start from t=0
+    other_agent_sync_times = [tau[j] for j in keys(tau) if j != agent.id]
+    if any(sync_time == -1 for sync_time in other_agent_sync_times)
+        t_clean = 0  # Start from t=0 if any agent hasn't synced yet
+        println("  🔄 Initial case: some agents haven't synced yet, starting from t_clean = 0")
+    else
+        t_clean = minimum(other_agent_sync_times)
+        println("  🔄 Using t_clean = $(t_clean) (minimum of other agent sync times)")
+    end
+    @infiltrate
+    # Special case: if t_clean = 0 but there are scheduled observations at t=0 that we don't know,
+    # we need to branch over them starting from t=0
+    if t_clean == 0
+        # Check if there are any scheduled observations at t=0 that we don't have in our history
+        scheduled_at_t0 = get_scheduled_observations_at_time(0, gs_state)
+        known_at_t0 = get_known_observations_at_time(0, gs_state)
+        
+        # If there are scheduled observations at t=0 that we don't know, we need to branch
+        if !isempty(scheduled_at_t0) && isempty(known_at_t0)
+            println("  🔄 Found scheduled observations at t=0 that we don't know, will branch over them")
+            # We'll handle this in the branching windows
+        end
+    end
+    
+    # Step 2: Roll forward deterministically from uniform belief to t_clean-1 using known observations
     # Start with uniform belief distribution (we knew nothing at t=0)
     B = initialize_uniform_belief(env)
     for t in 0:(t_clean-1)
@@ -333,27 +355,50 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
             end
         end
     end
+
     # Step 3: Initialize branching structure at t_clean
+    # At t_clean, we start branching over unknown observations
     B_branches = Dict{Int, Vector{Tuple{Belief, Float64}}}()
     B_branches[t_clean] = [(B, 1.0)]
+    
     # Step 4: Create branching windows for each agent j ≠ i
     branch_windows = Vector{Tuple{Int, Int, Int}}()
     for (j, last_sync) in tau
         if j != agent.id
-            t_start = last_sync     # We have known observations up to here
-            t_end = tau_i        # Branch until current agent i sync
-            if t_start < t_end
-                push!(branch_windows, (t_start, t_end, j))
+            # Special case: if this agent has a plan and we're at t_clean=0,
+            # we need to branch over their scheduled observations starting from t=0
+            if t_clean == 0 && haskey(gs_state.agent_plans, j) && gs_state.agent_plans[j] !== nothing
+                # Check if this agent has scheduled observations at t=0
+                plan = gs_state.agent_plans[j]
+                if 1 <= length(plan) && !isempty(plan[1].target_cells)
+                    # This agent has a scheduled observation at t=0, branch from t=0
+                    push!(branch_windows, (0, tau_i, j))
+                end
+            else
+                # Use t_clean as the starting point to avoid negative timesteps
+                t_start = max(t_clean, last_sync)  # We have known observations up to here
+                t_end = tau_i        # Branch until current agent i sync
+                if t_start < t_end
+                    push!(branch_windows, (t_start, t_end, j))
+                end
             end
         end
     end
     
     # Sort and merge overlapping windows to avoid double branching
     sort!(branch_windows)
-
+    
+    # If we're branching from t=0, make sure we have the belief at t=0
+    if t_clean == 0 && any(start_t == 0 for (start_t, _, _) in branch_windows)
+        B_branches[0] = [(B, 1.0)]
+    end
+    
+    println("  🔄 Branching windows: $(branch_windows)")
     # Step 5: Forward branch over unknown observations from other agents before tau_i
     for (start_t, end_t, agent_j) in branch_windows
+        println("  🔄 Processing branching window: $(start_t) to $(end_t) for agent $(agent_j)")
         for t in start_t:(end_t-1)
+            println("    🔄 Processing timestep $(t)")
             new_branches = Vector{Tuple{Belief, Float64}}()
             for (B_cur, p_branch) in B_branches[t]
 
@@ -363,9 +408,6 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                 obs_set = Vector{Tuple{Int, SensingAction}}()  # Unknown observations for branching
                 
                 # First, apply known observations from history (deterministic)
-                # if gs_state.time_step == 6
-                #     @infiltrate
-                # end
                 for (agent_k, action_k) in get_known_observations_at_time(t, gs_state)
                     if agent_k != agent.id
                         for cell in action_k.target_cells
@@ -374,20 +416,16 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                         end
                     end
                 end
-                # if gs_state.time_step == 6
-                #     @infiltrate
-                # end
                 # Then, get unknown observations from plans for branching
-                for (agent_k, action_k) in get_scheduled_observations_at_time(t, gs_state)
+                scheduled_obs = get_scheduled_observations_at_time(t, gs_state)
+                println("    🔄 Scheduled observations at t=$(t): $(scheduled_obs)")
+                for (agent_k, action_k) in scheduled_obs
                     if agent_k != agent.id && agent_k == agent_j  # Only branch over the agent in current window
                         push!(obs_set, (agent_k, action_k))
+                        println("    🔄 Adding observation from agent $(agent_k): $(action_k)")
                     end
                 end
-                
                 if !isempty(obs_set)
-                    # if gs_state.time_step == 6
-                    #     @infiltrate
-                    # end
                     for obs_combo in enumerate_all_possible_outcomes(B_evolved, obs_set)
                         # obs_combo = (cell, observed_state, probability)
                         B_new = deepcopy(B_evolved)
@@ -402,9 +440,30 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
             B_branches[t + 1] = merge_equivalent_beliefs(new_branches)
         end
     end
-    # if gs_state.time_step == 6
-    #     @infiltrate
-    # end
+    
+    return B_branches
+end
+
+"""
+Evaluate a single action sequence using exact belief evolution
+"""
+function evaluate_action_sequence_exact(env, belief₀, agent, seq, other_scripts, C, gs_state, rng::AbstractRNG)
+    # For exact evaluation, we don't use pre-enumerated worlds
+    # Instead, we directly simulate belief evolution using the Díaz-Avalos formula
+    B_branches = precompute_belief_branches(env, agent, gs_state)
+    return calculate_macro_script_reward(seq, other_scripts, C, env, agent, B_branches, gs_state)
+end
+
+"""
+Calculate reward for a macro-script using pre-computed belief branches
+"""
+function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts, C::Int, env, agent, B_branches, gs_state)
+    γ = env.discount
+    c_obs = 0.0 # Cost of performing an observation
+    
+    # Get current sync time for agent i
+    tau_i = gs_state.time_step
+    
     # Step 6: Simulate macro-script from tau_i forward (agent i)
     R_seq = zeros(length(seq))
     B_post = Dict{Int, Vector{Tuple{Belief, Float64}}}()
@@ -417,6 +476,9 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
         for (B, p_branch) in B_post[t_global]
             obs_set = Vector{Tuple{Int, SensingAction}}(get_scheduled_observations_at_time(t_global, gs_state))
             push!(obs_set, (agent.id, a_i))  # Include our own planned action
+            # if agent.id == 2 && all(!isempty(a.target_cells) for a in seq) && a_i.target_cells==[(2, 3)]
+            #     @infiltrate
+            # end
             # Check if all actions in obs_set are wait actions
             all_wait_actions = all(action.target_cells == Tuple{Int,Int}[] for (_, action) in obs_set)
             
@@ -435,8 +497,10 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                 push!(new_branches, (B_next, p_branch))
             end
         end
-        
         B_post[t_global + 1] = merge_equivalent_beliefs(new_branches)
+        
+        # Check that probability branches sum to 1.0
+        total_prob = sum(p_branch for (_, p_branch) in B_post[t_global + 1])        
         # if gs_state.time_step == 6
         #     @infiltrate
         # end
@@ -448,17 +512,27 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                 break
             end
         end
+        # if agent.id == 2
+        #     @infiltrate
+        # end
+        # if agent.id == 2 && all(!isempty(a.target_cells) for a in seq) && a_i.target_cells==[(2, 3)]
+        #     @infiltrate
+        # end
         # Step 6.2: Compute expected reward at time t_global
         expected_reward = 0.0
         for (B_cur, p_branch) in B_post[t_global]
             for cell in a_i.target_cells
-
+                # if agent.id == 2 && all(!isempty(a.target_cells) for a in seq) && a_i.target_cells==[(2, 3)]
+                #     @infiltrate
+                # end
                 H_before = calculate_cell_entropy(B_cur, cell)
                 H_after = 0.0
                 info_gain = H_before - H_after
                 weighted_gain = info_gain * get_event_probability(B_cur, cell)
+                #weighted_gain = info_gain
                 expected_reward += p_branch * weighted_gain
             end
+
             
             if !isempty(a_i.target_cells)
                 expected_reward -= p_branch * c_obs
@@ -507,7 +581,7 @@ function get_scheduled_observations_at_time(t::Int, gs_state)
     for (agent_id, plan) in gs_state.agent_plans
         if plan !== nothing && gs_state.agent_plan_types[agent_id] == :script
             # For macro-scripts, check if this timestep has an action
-            plan_timestep = t - gs_state.agent_last_sync[agent_id]
+            plan_timestep = (t - gs_state.agent_last_sync[agent_id]) + 1
             if 1 <= plan_timestep <= length(plan)
                 action = plan[plan_timestep]
                 if !isempty(action.target_cells)

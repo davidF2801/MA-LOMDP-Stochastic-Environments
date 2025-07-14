@@ -22,12 +22,12 @@ using Infiltrator
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 100               # Total simulation steps
+const NUM_STEPS = 50               # Total simulation steps
 const PLANNING_MODE = :script         # Use macro-script planning
 
 # 🌍 ENVIRONMENT PARAMETERS
-const GRID_WIDTH = 2                  # Grid width (columns)
-const GRID_HEIGHT = 3                 # Grid height (rows)
+const GRID_WIDTH = 3                  # Grid width (columns)
+const GRID_HEIGHT = 4                 # Grid height (rows)
 const INITIAL_EVENTS = 1              # Number of initial events
 const MAX_SENSING_TARGETS = 1         # Maximum cells an agent can sense per step
 const SENSOR_RANGE = 0.0              # Sensor range for agents (0.0 = row-only visibility)
@@ -46,15 +46,34 @@ const SENSOR_NOISE = 0.0              # Perfect observations
 
 # 📡 COMMUNICATION PARAMETERS
 const CONTACT_HORIZON = 3             # Steps until next sync opportunity
-const GROUND_STATION_X = 1            # Ground station X position
+const GROUND_STATION_X = 2            # Ground station X position
 const GROUND_STATION_Y = 1            # Ground station Y position
 
-# Add RSP parameter constants at the top
-const RSP_LAMBDA = 0.005
-const RSP_BETA0 = 0.005
-const RSP_ALPHA = 0.05
-const RSP_DELTA = 0.8
-const RSP_MU = 0.2
+# =============================================================================
+# RSP (Random Spread Process) MODEL PARAMETERS
+# -----------------------------------------------------------------------------
+# These constants control the stochastic event dynamics in the RSP model.
+# Each parameter has a specific meaning in the context of event spread and decay:
+#
+#   RSP_LAMBDA:  Local ignition intensity (λ) - could be λmap[y,x]; 0–1
+#                - Additional ignition probability from local conditions
+#   RSP_BETA0:   Spontaneous (background) ignition probability when no neighbors burn
+#                - Base probability of spontaneous event birth
+#   RSP_ALPHA:   Contagion contribution of each active neighbor
+#                - How much each neighboring event increases birth probability
+#   RSP_DELTA:   Probability the fire persists (EVENT→EVENT)
+#                - Probability of event survival/continuation
+#   RSP_MU:      Probability the fire dies (EVENT→NO_EVENT)
+#                - Probability of event death/extinction
+#
+# Tune these parameters to explore different behaviors.
+# -----------------------------------------------------------------------------
+const RSP_LAMBDA = 0.01   # Local ignition intensity (λ)
+const RSP_BETA0  = 0.01   # Spontaneous ignition probability (β₀)
+const RSP_ALPHA  = 0.05   # Contagion contribution per neighbor (α)
+const RSP_DELTA  = 0.9    # Event persistence probability (δ)
+const RSP_MU     = 1.0 - RSP_DELTA  # Event death probability (μ = 1 - δ)
+# =============================================================================
 
 # =============================================================================
 
@@ -83,33 +102,14 @@ using .Planners.PolicyTreePlanner
 import .Environment.EventDynamicsModule: transition_rsp!, get_transition_probability_rsp
 import .Agents.BeliefManagement: predict_belief_rsp
 
+# Import functions from MacroPlannerAsync
+import .MacroPlannerAsync: initialize_uniform_belief, get_known_observations_at_time, has_known_observation, get_known_observation, evolve_no_obs, collapse_belief_to
+
 println("✅ All modules imported successfully")
 
 # =============================================================================
 # ROW-ONLY VISIBILITY FUNCTIONS
 # =============================================================================
-
-"""
-Get agent position at time t for row-cycling agents
-Agents cycle through rows: Agent 1: 1→2→3→1→2→3..., Agent 2: 3→1→2→3→1→2...
-"""
-function get_agent_position_row_cycle(agent_id::Int, time::Int, phase_offset::Int)
-    # Calculate which row the agent should be in at this time
-    # Each agent cycles through rows 1, 2, 3 with period 3
-    cycle_position = (time + phase_offset) % 3
-    
-    # Map cycle position to actual row
-    if cycle_position == 0
-        row = 1
-    elseif cycle_position == 1
-        row = 2
-    else  # cycle_position == 2
-        row = 3
-    end
-    
-    # Always in column 1
-    return (1, row)
-end
 
 """
 Get field of regard for an agent at a specific position (row-only visibility)
@@ -138,24 +138,14 @@ function create_row_agents()
     agent_rows = [1, 3]
     
     for (i, row) in enumerate(agent_rows)
-        # Create trajectory that cycles through all three rows
-        # For a 3-row grid, we need to cycle through positions (1,1), (1,2), (1,3)
-        if i == 1
-            # Agent 1: starts in row 1, cycles 1→2→3→1→2→3...
-            trajectory = LinearTrajectory(1, 1, 1, 3, 3, 1.0)  # Period = 3, moves from row 1 to row 3
-            phase_offset = 0  # Start at row 1
-        else
-            # Agent 2: starts in row 3, cycles 3→1→2→3→1→2...
-            trajectory = LinearTrajectory(1, 1, 1, 3, 3, 1.0)  # Period = 3, moves from row 1 to row 3
-            phase_offset = 2  # Start at row 3 (phase offset of 2)
-        end
-        
+        # Create trajectory that cycles through all four rows
+        # For a 4-row grid, we need to cycle through positions (2,1), (2,2), (2,3), (2,4)
+        trajectory = LinearTrajectory(2, 1, 2, 4, 4, 1.0)  # Period = 4, moves from row 1 to row 4
+        phase_offset = (row - 1)  # Start at the correct row
         # Sensor with row-only visibility
         sensor = RangeLimitedSensor(SENSOR_RANGE, SENSOR_FOV, SENSOR_NOISE)
-        
         # Agent with phase offset based on starting row
         agent = Agent(i, trajectory, sensor, phase_offset)
-        
         push!(agents, agent)
     end
     
@@ -219,14 +209,14 @@ function visualize_rsp_state(
     ground_station_pos::Tuple{Int, Int}=(GROUND_STATION_X, GROUND_STATION_Y)
 )
     height, width = size(environment_state)
-    agent_colors = [:red, :green, :blue, :orange]  # Add more if needed
+    agent_colors = [:red, :blue, :green, :orange]  # Add more if needed
 
     # Create a blank plot with correct limits and aspect
     p = plot(; xlim=(0.5, width+0.5), ylim=(0.5, height+0.5),
         aspect_ratio=:equal, size=(600, 800), legend=false,
         xlabel="X Coordinate", ylabel="Y Coordinate",
         grid=false,
-        title="RSP 3x2 Test - Time Step $(time_step) Events: $(count(==(EVENT_PRESENT), environment_state)) | Agents: $(length(agents))",
+        title="RSP $(width)x$(height) Test - Time Step $(time_step) Events: $(count(==(EVENT_PRESENT), environment_state)) | Agents: $(length(agents))",
         titlefontsize=12,
         background_color=:white
     )
@@ -241,7 +231,7 @@ function visualize_rsp_state(
     # Overlay: FOR and action for each agent
     for (i, agent) in enumerate(agents)
         color = agent_colors[i]
-        pos = get_agent_position_row_cycle(agent.id, time_step, agent.phase_offset)
+        pos = get_position_at_time(agent.trajectory, time_step, agent.phase_offset)
         # Get FOR cells
         for_cells = get_row_field_of_regard(agent, pos, (width=width, height=height))
         # Highlight FOR (light color)
@@ -250,9 +240,15 @@ function visualize_rsp_state(
             ys = [y-0.5, y-0.5, y+0.5, y+0.5]
             plot!(p, xs, ys, seriestype=:shape, fillcolor=color, linecolor=:black, alpha=0.18, label=false)
         end
-        # Highlight action (dark color)
-        if i <= length(actions) && !isempty(actions[i].target_cells)
-            for (x, y) in actions[i].target_cells
+        # Highlight agent's own position in FOR (light color, but slightly more opaque)
+        x, y = pos
+        xs = [x-0.5, x+0.5, x+0.5, x-0.5]
+        ys = [y-0.5, y-0.5, y+0.5, y+0.5]
+        plot!(p, xs, ys, seriestype=:shape, fillcolor=color, linecolor=:black, alpha=0.28, label=false)
+        # Highlight action (dark color), matching by agent id
+        action_idx = findfirst(a -> a.agent_id == agent.id, actions)
+        if action_idx !== nothing && !isempty(actions[action_idx].target_cells)
+            for (x, y) in actions[action_idx].target_cells
                 xs = [x-0.5, x+0.5, x+0.5, x-0.5]
                 ys = [y-0.5, y-0.5, y+0.5, y+0.5]
                 plot!(p, xs, ys, seriestype=:shape, fillcolor=color, linecolor=:black, alpha=0.5, label=false)
@@ -265,7 +261,7 @@ function visualize_rsp_state(
 
     # Overlay: Agents as small circles
     for (i, agent) in enumerate(agents)
-        pos = get_agent_position_row_cycle(agent.id, time_step, agent.phase_offset)
+        pos = get_position_at_time(agent.trajectory, time_step, agent.phase_offset)
         agent_color = agent_colors[i]
         scatter!(p, [pos[1]], [pos[2]]; marker=:circle, markersize=10, color=agent_color, alpha=0.9, label=false)
     end
@@ -316,6 +312,7 @@ function create_rsp_animation(
         else
             SensingAction[]
         end
+        @infiltrate
         
         # Create frame
         frame = visualize_rsp_state(step, agents, env_state, actions, ground_station_pos)
@@ -714,7 +711,9 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
             plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
             action = execute_plan(agent, plan, plan_type, agent.observation_history)
             push!(joint_actions, action)
-            
+            if agent.id == 1
+                @infiltrate
+            end
             # Use POMDP interface to get observations
             if !isempty(action.target_cells)
                 # Get observation using POMDP observation model
@@ -749,6 +748,33 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
         push!(environment_evolution, copy(current_environment))
         push!(action_history, joint_actions)
         
+        # Update global belief with new observations using t_clean logic
+        if gs_state.global_belief !== nothing
+            # Determine t_clean (last time where all observation outcomes are known)
+            tau = gs_state.agent_last_sync
+            t_clean = minimum([tau[j] for j in keys(tau)])
+            
+            # Roll forward deterministically from uniform belief to t_clean using known observations
+            B = initialize_uniform_belief(env)
+            for t_roll in 0:(t_clean-1)
+                B = evolve_no_obs(B, env)  # Contagion-aware update
+                # Apply known observations (perfect observations)
+                for (agent_j, action_j) in get_known_observations_at_time(t_roll, gs_state)
+                    for cell in action_j.target_cells
+                        if has_known_observation(t_roll, cell, gs_state)
+                            observed_value = get_known_observation(t_roll, cell, gs_state)
+                            B = collapse_belief_to(B, cell, observed_value)
+                        end
+                    end
+                end
+            end
+            
+            # Update the global belief with the belief at t_clean
+            gs_state.global_belief.event_distributions = B.event_distributions
+            gs_state.global_belief.uncertainty_map = B.uncertainty_map
+            gs_state.global_belief.last_update = t_clean
+        end
+        
         # Record uncertainty state for visualization
         if gs_state.global_belief !== nothing
             push!(uncertainty_evolution, copy(gs_state.global_belief.uncertainty_map))
@@ -782,7 +808,7 @@ function simulate_rsp_async_planning(num_steps::Int=NUM_STEPS)
         # Debug: print agent positions
         println("  Agent positions at time $(t):")
         for (i, agent) in enumerate(agents)
-            pos = get_agent_position_row_cycle(agent.id, t, agent.phase_offset)
+            pos = get_position_at_time(agent.trajectory, t, agent.phase_offset)
             println("    Agent $(agent.id): $(pos)")
         end
     end
@@ -858,7 +884,7 @@ env = create_rsp_environment()
 #     println("Agent $(agent.id): trajectory=$(agent.trajectory), phase_offset=$(agent.phase_offset)")
 #     println("Expected cycle: Agent $(agent.id) should cycle through rows $(agent.id == 1 ? "1→2→3→1→2→3..." : "3→1→2→3→1→2...")")
 #     for t in 0:9
-#         pos = get_agent_position_row_cycle(agent.id, t, agent.phase_offset)
+#         pos = get_position_at_time(agent.trajectory, t, agent.phase_offset)
 #         println("  Time $(t): $(pos)")
 #     end
 # end

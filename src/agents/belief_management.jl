@@ -20,7 +20,8 @@ export update_belief_state, initialize_belief, predict_belief_evolution_dbn,
        predict_belief_rsp, evolve_no_obs, get_neighbor_beliefs, enumerate_joint_states,
        product, normalize_belief_distributions, collapse_belief_to, 
        enumerate_all_possible_outcomes, merge_equivalent_beliefs, calculate_cell_entropy,
-       get_event_probability, calculate_entropy_from_distribution
+       get_event_probability, calculate_entropy_from_distribution, clear_belief_evolution_cache!,
+       get_cache_stats
 
 # Belief type is now defined in Types module
 
@@ -406,10 +407,64 @@ function get_rsp_transition_probability_belief(next_state, current_state, neighb
     end
 end
 
+# Global cache for belief evolution to avoid redundant computations
+const BELIEF_EVOLUTION_CACHE = Dict{String, Belief}()
+const CACHE_STATS = Dict{Symbol, Int}(:hits => 0, :misses => 0)
+
+"""
+Clear the belief evolution cache (useful for memory management)
+"""
+function clear_belief_evolution_cache!()
+    empty!(BELIEF_EVOLUTION_CACHE)
+    CACHE_STATS[:hits] = 0
+    CACHE_STATS[:misses] = 0
+end
+
+"""
+Get cache statistics
+"""
+function get_cache_stats()
+    total_requests = CACHE_STATS[:hits] + CACHE_STATS[:misses]
+    hit_rate = total_requests > 0 ? CACHE_STATS[:hits] / total_requests : 0.0
+    return Dict(
+        :hits => CACHE_STATS[:hits],
+        :misses => CACHE_STATS[:misses],
+        :total_requests => total_requests,
+        :hit_rate => hit_rate,
+        :cache_size => length(BELIEF_EVOLUTION_CACHE)
+    )
+end
+
+"""
+Get cache key for a belief and environment
+"""
+function get_belief_cache_key(B::Belief, env)
+    # Create a hash that includes both belief state and environment parameters
+    belief_hash = string(B.event_distributions)
+    env_hash = string(env.rsp_params)
+    return belief_hash * "|" * env_hash
+end
+
 """
 Evolve belief without observations using Díaz-Avalos formula
 """
 function evolve_no_obs(B::Belief, env)
+    # Check cache first
+    cache_key = get_belief_cache_key(B, env)
+    if haskey(BELIEF_EVOLUTION_CACHE, cache_key)
+        CACHE_STATS[:hits] += 1
+        cached_belief = BELIEF_EVOLUTION_CACHE[cache_key]
+        # Return a copy to avoid modifying the cached version
+        return Belief(
+            copy(cached_belief.event_distributions),
+            copy(cached_belief.uncertainty_map),
+            cached_belief.last_update,
+            copy(cached_belief.history)
+        )
+    end
+    
+    CACHE_STATS[:misses] += 1
+    
     # Create new belief with evolved distributions
     new_distributions = similar(B.event_distributions)
     num_states, height, width = size(new_distributions)
@@ -440,7 +495,12 @@ function evolve_no_obs(B::Belief, env)
     new_distributions = normalize_belief_distributions(new_distributions)
     uncertainty_map = calculate_uncertainty_map_from_distributions(new_distributions)
     
-    return Belief(new_distributions, uncertainty_map, B.last_update + 1, B.history)
+    evolved_belief = Belief(new_distributions, uncertainty_map, B.last_update + 1, B.history)
+    
+    # Cache the result
+    BELIEF_EVOLUTION_CACHE[cache_key] = evolved_belief
+    
+    return evolved_belief
 end
 
 """

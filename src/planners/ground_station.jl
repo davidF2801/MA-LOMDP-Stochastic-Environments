@@ -81,7 +81,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                         observed_state = observation.event_states[i]
                         # Calculate the actual timestep when this observation occurred
                         # obs_idx is 1-based, so we add it to the last sync time
-                        obs_timestep = gs_state.agent_last_sync[agent_id] + obs_idx
+                        obs_timestep = gs_state.agent_last_sync[agent_id] + obs_idx-1
                         push!(gs_state.agent_observation_history[agent_id], (obs_timestep, cell, observed_state))
                     end
                 end

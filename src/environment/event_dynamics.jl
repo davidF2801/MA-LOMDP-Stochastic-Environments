@@ -236,7 +236,23 @@ function calculate_spread_probability(dynamics::EventDynamics, current_state, ne
 end
 
 # =============================================================================
-# RSP (Random Spread Process) Implementation
+# RSP (Random Spread Process) MODEL PARAMETERS
+# -----------------------------------------------------------------------------
+# These constants control the stochastic event dynamics in the RSP model.
+# Each parameter has a specific meaning in the context of event spread and decay:
+#
+#   RSP_LAMBDA:  Local ignition intensity (λ) - could be λmap[y,x]; 0–1
+#                - Additional ignition probability from local conditions
+#   RSP_BETA0:   Spontaneous (background) ignition probability when no neighbors burn
+#                - Base probability of spontaneous event birth
+#   RSP_ALPHA:   Contagion contribution of each active neighbor
+#                - How much each neighboring event increases birth probability
+#   RSP_DELTA:   Probability the fire persists (EVENT→EVENT)
+#                - Probability of event survival/continuation
+#   RSP_MU:      Probability the fire dies (EVENT→NO_EVENT)
+#                - Probability of event death/extinction
+#
+# Tune these parameters to explore different behaviors.
 # =============================================================================
 
 """

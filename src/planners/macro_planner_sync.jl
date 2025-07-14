@@ -422,26 +422,8 @@ get_agent_position_at_time(agent::Agent, env, timestep_offset::Int)
 Gets agent's position at a specific future timestep.
 """
 function get_agent_position_at_time(agent::Agent, env, timestep_offset::Int)
-    # Calculate position at future timestep using trajectory and phase offset
     t = get_current_time(env, agent) + timestep_offset
-    
-    # Apply phase offset
-    adjusted_time = t + agent.phase_offset
-    
-    # Calculate position based on trajectory type
-    if typeof(agent.trajectory) <: CircularTrajectory
-        angle = 2π * (adjusted_time % agent.trajectory.period) / agent.trajectory.period
-        x = agent.trajectory.center_x + round(Int, agent.trajectory.radius * cos(angle))
-        y = agent.trajectory.center_y + round(Int, agent.trajectory.radius * sin(angle))
-        return (x, y)
-    elseif typeof(agent.trajectory) <: LinearTrajectory
-        t_normalized = (adjusted_time % agent.trajectory.period) / agent.trajectory.period
-        x = round(Int, agent.trajectory.start_x + t_normalized * (agent.trajectory.end_x - agent.trajectory.start_x))
-        y = round(Int, agent.trajectory.start_y + t_normalized * (agent.trajectory.end_y - agent.trajectory.start_y))
-        return (x, y)
-    else
-        return (1, 1)  # fallback
-    end
+    return get_position_at_time(agent.trajectory, t, agent.phase_offset)
 end
 
 """

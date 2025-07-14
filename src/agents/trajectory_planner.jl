@@ -35,14 +35,10 @@ get_position_at_time(trajectory::LinearTrajectory, time::Int)
 Gets agent position at a specific time for linear trajectory
 """
 function get_position_at_time(trajectory::LinearTrajectory, time::Int)
-    # TODO: Implement linear trajectory position calculation
-    # - Interpolate between start and end points
-    # - Handle periodic repetition
-    
-    t = (time % trajectory.period) / trajectory.period
-    x = round(Int, trajectory.start_x + t * (trajectory.end_x - trajectory.start_x))
-    y = round(Int, trajectory.start_y + t * (trajectory.end_y - trajectory.start_y))
-    
+    step = (time % trajectory.period)
+    n_steps = trajectory.period - 1
+    x = round(Int, trajectory.start_x + step * (trajectory.end_x - trajectory.start_x) / n_steps)
+    y = round(Int, trajectory.start_y + step * (trajectory.end_y - trajectory.start_y) / n_steps)
     return (x, y)
 end
 
