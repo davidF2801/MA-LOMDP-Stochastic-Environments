@@ -133,7 +133,7 @@ function update_belief_dbn(belief::BeliefState, model::DBNTransitionModel2)
             
             # Calculate uncertainty (entropy)
             if new_prob > 0.0 && new_prob < 1.0
-                new_uncertainty[y, x] = -(new_prob * log(new_prob) + (1.0 - new_prob) * log(1.0 - new_prob))
+                new_uncertainty[y, x] = -(new_prob * log2(new_prob) + (1.0 - new_prob) * log2(1.0 - new_prob))
             else
                 new_uncertainty[y, x] = 0.0
             end
@@ -496,7 +496,7 @@ function visualize_uncertainty(belief::BeliefState, title::String="Uncertainty M
     p = heatmap(belief.uncertainty, 
                 aspect_ratio=:equal,
                 color=:Reds,
-                clim=(0, 0.7),  # Max entropy for binary is log(2) ≈ 0.693
+                clim=(0, 0.7),  # Max entropy for binary is log2(2) ≈ 0.693
                 title=title,
                 xlabel="X",
                 ylabel="Y",

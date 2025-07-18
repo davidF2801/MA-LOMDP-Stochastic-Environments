@@ -41,6 +41,9 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state):
   – Return argmax sequence (ties → first).
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG)
+    # Start timing
+    start_time = time()
+    
     # Clear belief evolution cache at the start of each planning session
     clear_belief_evolution_cache!()
     
@@ -50,7 +53,8 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     #     @infiltrate
     # end
     if isempty(action_sequences)
-        return SensingAction[]
+        end_time = time()
+        return SensingAction[], end_time - start_time
     end
     
     # Step 1 & 2: Pre-compute belief branches up to t_clean (independent of action sequences)
@@ -72,12 +76,17 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
         end
     end
     
-    println("✅ Best sequence found with value: $(round(best_value, digits=3))")
+    # End timing
+    end_time = time()
+    planning_time = end_time - start_time
+    
+    println("✅ Best sequence found with value: $(round(best_value, digits=3)) in $(round(planning_time, digits=3)) seconds")
     
     # Report cache statistics
     cache_stats = get_cache_stats()
     println("📊 Cache statistics: $(cache_stats[:hits]) hits, $(cache_stats[:misses]) misses, $(round(cache_stats[:hit_rate] * 100, digits=1))% hit rate")
-    return best_sequence
+    
+    return best_sequence, planning_time
 end
 
 """
@@ -225,7 +234,7 @@ end
 Get field of view for an agent at a position
 """
 function get_field_of_regard(agent, position, env)
-    # Use the same logic as get_field_of_regard_at_position for consistency
+    # Use the same log2ic as get_field_of_regard_at_position for consistency
     return get_field_of_regard_at_position(agent, position, env)
 end
 
@@ -325,7 +334,6 @@ function precompute_belief_branches(env, agent, gs_state)
         t_clean = minimum(other_agent_sync_times)
         println("  🔄 Using t_clean = $(t_clean) (minimum of other agent sync times)")
     end
-    @infiltrate
     # Special case: if t_clean = 0 but there are scheduled observations at t=0 that we don't know,
     # we need to branch over them starting from t=0
     if t_clean == 0
@@ -408,7 +416,8 @@ function precompute_belief_branches(env, agent, gs_state)
                 obs_set = Vector{Tuple{Int, SensingAction}}()  # Unknown observations for branching
                 
                 # First, apply known observations from history (deterministic)
-                for (agent_k, action_k) in get_known_observations_at_time(t, gs_state)
+                known_obs = get_known_observations_at_time(t, gs_state)
+                for (agent_k, action_k) in known_obs
                     if agent_k != agent.id
                         for cell in action_k.target_cells
                             observed_value = get_known_observation(t, cell, gs_state)
@@ -420,7 +429,17 @@ function precompute_belief_branches(env, agent, gs_state)
                 scheduled_obs = get_scheduled_observations_at_time(t, gs_state)
                 println("    🔄 Scheduled observations at t=$(t): $(scheduled_obs)")
                 for (agent_k, action_k) in scheduled_obs
-                    if agent_k != agent.id && agent_k == agent_j  # Only branch over the agent in current window
+                    # Only branch over observations that are not already known
+                    # Check if this observation is already known by comparing agent_id and target_cells
+                    is_known = false
+                    for (known_agent, known_action) in known_obs
+                        if agent_k == known_agent && action_k.target_cells == known_action.target_cells
+                            is_known = true
+                            break
+                        end
+                    end
+                    
+                    if !is_known && agent_k != agent.id && agent_k == agent_j
                         push!(obs_set, (agent_k, action_k))
                         println("    🔄 Adding observation from agent $(agent_k): $(action_k)")
                     end
@@ -432,6 +451,7 @@ function precompute_belief_branches(env, agent, gs_state)
                         cell, observed_state, probability = obs_combo
                         B_new = collapse_belief_to(B_new, cell, observed_state)
                         push!(new_branches, (B_new, p_branch * probability))
+
                     end
                 else
                     push!(new_branches, (B_evolved, p_branch))
@@ -440,7 +460,9 @@ function precompute_belief_branches(env, agent, gs_state)
             B_branches[t + 1] = merge_equivalent_beliefs(new_branches)
         end
     end
-    
+    if t_clean > 1
+        @infiltrate
+    end
     return B_branches
 end
 
@@ -474,12 +496,9 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
         t_global = tau_i + k - 1
         new_branches = Vector{Tuple{Belief, Float64}}()
         for (B, p_branch) in B_post[t_global]
+            @infiltrate
             obs_set = Vector{Tuple{Int, SensingAction}}(get_scheduled_observations_at_time(t_global, gs_state))
             push!(obs_set, (agent.id, a_i))  # Include our own planned action
-            # if agent.id == 2 && all(!isempty(a.target_cells) for a in seq) && a_i.target_cells==[(2, 3)]
-            #     @infiltrate
-            # end
-            # Check if all actions in obs_set are wait actions
             all_wait_actions = all(action.target_cells == Tuple{Int,Int}[] for (_, action) in obs_set)
             
             if !all_wait_actions
@@ -576,7 +595,6 @@ Get scheduled observations at a specific time (from agent plans)
 """
 function get_scheduled_observations_at_time(t::Int, gs_state)
     observations = Vector{Tuple{Int, SensingAction}}()
-    
     # Check all agents' plans for observations at this time
     for (agent_id, plan) in gs_state.agent_plans
         if plan !== nothing && gs_state.agent_plan_types[agent_id] == :script
@@ -634,7 +652,7 @@ end
 Calculate information gain for a single cell: G(b_k) = H(b_k) * P(event)
 """
 function calculate_cell_information_gain(prob_vector::Vector{Float64})
-    # Calculate entropy: H(b_k) = -∑ p_i * log(p_i)
+    # Calculate entropy: H(b_k) = -∑ p_i * log2(p_i)
     entropy = calculate_entropy_from_distribution(prob_vector)
     
     # Weight by event probability: G(b_k) = H(b_k) * P(event)
@@ -661,13 +679,13 @@ end
 
 """
 Calculate entropy for a multi-state belief distribution
-H(b_k) = -∑ p_i * log(p_i)
+H(b_k) = -∑ p_i * log2(p_i)
 """
 function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
     entropy = 0.0
     for prob in prob_vector
         if prob > 0.0
-            entropy -= prob * log(prob)
+            entropy -= prob * log2(prob)
         end
     end
     return entropy

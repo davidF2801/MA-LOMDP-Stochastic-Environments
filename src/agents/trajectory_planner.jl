@@ -146,8 +146,8 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
         return SensingAction(agent_id, Tuple{Int, Int}[], false)
     end
     
-    if plan_type == :script
-        # Execute macro-script (open-loop)
+    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy
+        # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, or greedy sequence
         if !isempty(plan)
             # Get the action at the current plan index
             if agent.plan_index <= length(plan)

@@ -154,7 +154,7 @@ function calculate_uncertainty(probability::Float64)
     if probability <= 0.0 || probability >= 1.0
         return 0.0
     end
-    return -(probability * log(probability) + (1 - probability) * log(1 - probability))
+    return -(probability * log2(probability) + (1 - probability) * log2(1 - probability))
 end
 
 """
@@ -605,7 +605,7 @@ function calculate_entropy(probability::Float64)
     if probability <= 0.0 || probability >= 1.0
         return 0.0
     end
-    return -(probability * log(probability) + (1 - probability) * log(1 - probability))
+    return -(probability * log2(probability) + (1 - probability) * log2(1 - probability))
 end
 
 """
@@ -616,7 +616,7 @@ function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
     entropy = 0.0
     for prob in prob_vector
         if prob > 0.0
-            entropy -= prob * log(prob)
+            entropy -= prob * log2(prob)
         end
     end
     return entropy

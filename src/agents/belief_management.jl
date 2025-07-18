@@ -19,7 +19,7 @@ export update_belief_state, initialize_belief, predict_belief_evolution_dbn,
        update_cell_distribution, get_neighbor_event_probabilities, sample_from_belief,
        predict_belief_rsp, evolve_no_obs, get_neighbor_beliefs, enumerate_joint_states,
        product, normalize_belief_distributions, collapse_belief_to, 
-       enumerate_all_possible_outcomes, merge_equivalent_beliefs, calculate_cell_entropy,
+       enumerate_all_possible_outcomes, merge_equivalent_beliefs, beliefs_are_equivalent, calculate_cell_entropy,
        get_event_probability, calculate_entropy_from_distribution, clear_belief_evolution_cache!,
        get_cache_stats
 
@@ -177,7 +177,7 @@ end
 # function get_transition_probability(next_state::Int, current_state::Int, neighbor_states::Vector{Int}, env)
 #     # Use RSP transition model if available
 #     if hasfield(typeof(env), :ignition_prob) && env.ignition_prob !== nothing
-#         # RSP transition model - use the same logic as real world simulation
+#         # RSP transition model - use the same log2ic as real world simulation
 #         # For belief evolution, we don't have the specific cell position, so we'll use a simplified version
 #         if next_state == 0  # NO_EVENT
 #             if current_state == 0  # Currently NO_EVENT
@@ -295,7 +295,7 @@ function calculate_uncertainty_from_distribution(prob_vector::Vector{Float64})
     entropy = 0.0
     for prob in prob_vector
         if prob > 0.0
-            entropy -= prob * log(prob)
+            entropy -= prob * log2(prob)
 end
     end
     return entropy
@@ -587,20 +587,57 @@ end
 Enumerate all possible observation outcomes
 """
 function enumerate_all_possible_outcomes(B::Belief, obs_set::Vector{Tuple{Int, SensingAction}})
-    outcomes = Vector{Tuple{Tuple{Int, Int}, EventState, Float64}}()
+    if isempty(obs_set)
+        return Vector{Tuple{Vector{Tuple{Tuple{Int, Int}, EventState}}, Float64}}()
+    end
     
+    # Collect all cells that will be observed
+    all_cells = Vector{Tuple{Int, Int}}()
     for (agent_id, action) in obs_set
         for cell in action.target_cells
-            # Get belief for this cell
-            x, y = cell
-            cell_belief = B.event_distributions[:, y, x]
-            
-            # For each possible observation outcome
-            for state in 1:length(cell_belief)
-                if cell_belief[state] > 0
-                    push!(outcomes, (cell, EventState(state-1), cell_belief[state]))
-                end
+            push!(all_cells, cell)
+        end
+    end
+    
+    # Remove duplicates while preserving order
+    unique_cells = Vector{Tuple{Int, Int}}()
+    for cell in all_cells
+        if cell ∉ unique_cells
+            push!(unique_cells, cell)
+        end
+    end
+    
+    # Generate all possible combinations of observations for all cells
+    outcomes = Vector{Tuple{Vector{Tuple{Tuple{Int, Int}, EventState}}, Float64}}()
+    
+    # For each cell, get possible states and their probabilities
+    cell_outcomes = Vector{Vector{Tuple{Tuple{Int, Int}, EventState, Float64}}}()
+    for cell in unique_cells
+        x, y = cell
+        cell_belief = B.event_distributions[:, y, x]
+        cell_outcome = Vector{Tuple{Tuple{Int, Int}, EventState, Float64}}()
+        
+        for state in 1:length(cell_belief)
+            if cell_belief[state] > 0
+                push!(cell_outcome, (cell, EventState(state-1), cell_belief[state]))
             end
+        end
+        push!(cell_outcomes, cell_outcome)
+    end
+    
+    # Generate all combinations using Cartesian product
+    if !isempty(cell_outcomes)
+        for combination in Iterators.product(cell_outcomes...)
+            # Calculate joint probability by multiplying individual probabilities
+            joint_prob = 1.0
+            observation_combo = Vector{Tuple{Tuple{Int, Int}, EventState}}()
+            
+            for (cell, state, prob) in combination
+                joint_prob *= prob
+                push!(observation_combo, (cell, state))
+            end
+            
+            push!(outcomes, (observation_combo, joint_prob))
         end
     end
     
@@ -611,21 +648,44 @@ end
 Merge equivalent beliefs and sum their probabilities
 """
 function merge_equivalent_beliefs(beliefs::Vector{Tuple{Belief, Float64}})
-    merged = Dict{String, Tuple{Belief, Float64}}()
+    if isempty(beliefs)
+        return beliefs
+    end
+    
+    merged = Vector{Tuple{Belief, Float64}}()
     
     for (belief, prob) in beliefs
-        # Create a hash of the belief for comparison
-        belief_hash = string(belief.event_distributions)
+        # Find if this belief is equivalent to any existing belief
+        found_equivalent = false
+        for i in 1:length(merged)
+            existing_belief, existing_prob = merged[i]
+            if beliefs_are_equivalent(belief, existing_belief)
+                # Merge probabilities
+                merged[i] = (existing_belief, existing_prob + prob)
+                found_equivalent = true
+                break
+            end
+        end
         
-        if haskey(merged, belief_hash)
-            existing_belief, existing_prob = merged[belief_hash]
-            merged[belief_hash] = (existing_belief, existing_prob + prob)
-        else
-            merged[belief_hash] = (belief, prob)
+        if !found_equivalent
+            push!(merged, (belief, prob))
         end
     end
     
-    return collect(values(merged))
+    return merged
+end
+
+"""
+Check if two beliefs are equivalent (within numerical tolerance)
+"""
+function beliefs_are_equivalent(B1::Belief, B2::Belief; tolerance::Float64=1e-10)
+    # Check if the event distributions are the same
+    if size(B1.event_distributions) != size(B2.event_distributions)
+        return false
+    end
+    
+    # Compare each element with tolerance
+    return all(abs.(B1.event_distributions .- B2.event_distributions) .< tolerance)
 end
 
 """
@@ -654,13 +714,13 @@ end
 
 """
 Calculate entropy for a multi-state belief distribution
-H(b_k) = -∑ p_i * log(p_i)
+H(b_k) = -∑ p_i * log2(p_i)
 """
 function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
     entropy = 0.0
     for prob in prob_vector
         if prob > 0.0
-            entropy -= prob * log(prob)
+            entropy -= prob * log2(prob)
         end
     end
     return entropy

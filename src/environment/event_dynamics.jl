@@ -445,7 +445,7 @@ function get_transition_probability_rsp(next_state::Int, current_state::Int,
     active_nbrs = count(x -> x == 1, nbr_states)  # 1 = EVENT_PRESENT
     if current_state == 0  # NO_EVENT
         # ---- Birth / ignition ----
-        birth_p = clamp(β0 + λ + α * active_nbrs, 0.0, 1.0)
+        birth_p = clamp(β0 + λ + α * active_nbrs/8, 0.0, 1.0)
         return next_state == 1 ? birth_p : 1.0 - birth_p
     else  # current_state == 1 (EVENT_PRESENT)
         # ---- Persistence or extinction ----

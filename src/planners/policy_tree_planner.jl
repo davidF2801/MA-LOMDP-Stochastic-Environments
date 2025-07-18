@@ -425,11 +425,11 @@ function get_cell_uncertainty(belief, cell)
     # Get the belief distribution for this cell
     cell_belief = belief[cell[1], cell[2]]
     
-    # Calculate Shannon entropy: -sum(p * log(p)) for non-zero probabilities
+    # Calculate Shannon entropy: -sum(p * log2(p)) for non-zero probabilities
     entropy = 0.0
     for (event_type, prob) in enumerate(cell_belief)
         if prob > 0.0
-            entropy -= prob * log(prob)
+            entropy -= prob * log2(prob)
         end
     end
     

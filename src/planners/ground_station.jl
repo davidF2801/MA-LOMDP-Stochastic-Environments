@@ -10,10 +10,18 @@ using ..Agents
 
 # Import planner modules
 include("macro_planner_async.jl")
+include("macro_planner_async_future_actions.jl")
 include("policy_tree_planner.jl")
+include("macro_planner_random.jl")
+include("macro_planner_sweep.jl")
+include("macro_planner_greedy.jl")
 
 using .MacroPlannerAsync
 using .PolicyTreePlanner
+using .MacroPlannerRandom
+using .MacroPlannerAsyncFutureActions
+using .MacroPlannerSweep
+using .MacroPlannerGreedy
 
 # Import Agent type from TrajectoryPlanner
 include("../agents/trajectory_planner.jl")
@@ -44,6 +52,9 @@ mutable struct GroundStationState
     agent_plan_types::Dict{Int, Symbol}  # :script or :policy for each agent
     agent_observation_history::Dict{Int, Vector{Tuple{Int, Tuple{Int, Int}, EventState}}}  # (timestep, cell, observed_state) for each agent
     time_step::Int
+    planning_times::Dict{Int, Vector{Float64}}  # Planning times for each agent
+    total_planning_time::Float64  # Total planning time across all agents
+    num_plans_computed::Int  # Total number of plans computed
 end
 
 """
@@ -55,7 +66,7 @@ maybe_sync!(env, gs_state, agents, t)
                  if mode == :script   → MacroPlanner.best_script(...)
                  if mode == :policy   → PolicyTreePlanner.best_policy_tree(...)
             – send plan back to agent (store in agent.plan)
-            – reset local log/clock for that agent
+            – reset local log2/clock for that agent
 """
 function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int; 
                     planning_mode::Symbol=:script, rng::AbstractRNG=Random.GLOBAL_RNG)
@@ -98,12 +109,58 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
             # Compute new plan based on planning mode
             if planning_mode == :script
                 println("📋 Computing macro-script for agent $(agent_id)")
-                new_plan = MacroPlannerAsync.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                new_plan, planning_time = MacroPlannerAsync.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :script
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :policy
                 println("🌳 Computing policy tree for agent $(agent_id)")
                 new_plan = PolicyTreePlanner.best_policy_tree(env, gs_state.global_belief, agent, C_i, other_plans, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :policy
+            elseif planning_mode == :random
+                println("🎲 Computing random plan for agent $(agent_id)")
+                new_plan, planning_time = MacroPlannerRandom.best_script_random(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :random
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) random planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :future_actions
+                println("🔮 Computing future actions for agent $(agent_id)")
+                new_plan, planning_time = MacroPlannerAsyncFutureActions.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :future_actions
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) future actions planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :sweep
+                println("🧹 Computing sweep plan for agent $(agent_id)")
+                new_plan, planning_time = MacroPlannerSweep.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :sweep
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) sweep planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :greedy
+                println("🤖 Computing greedy plan for agent $(agent_id)")
+                new_plan, planning_time = MacroPlannerGreedy.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :greedy
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) greedy planning time: $(round(planning_time, digits=3)) seconds")
             else
                 error("Unknown planning mode: $(planning_mode)")
             end
@@ -142,7 +199,7 @@ Get agent's observations since last synchronization
 """
 function get_agent_observations_since_sync(agent, last_sync::Int, current_time::Int)
     # Get observations that occurred after the last sync time
-    # Assumes observations are added to history in chronological order (one per time step)
+    # Assumes observations are added to history in chronolog2ical order (one per time step)
     
     if last_sync == -1
         # First sync - return all observations
@@ -170,7 +227,7 @@ function get_agent_observations_since_sync(agent, last_sync::Int, current_time::
 end
 
 """
-Update global belief with new observations using the same logic as macro planner async
+Update global belief with new observations using the same log2ic as macro planner async
 Updates belief till t_clean (last time where all observation outcomes are known)
 """
 function update_global_belief!(global_belief, observations::Vector{GridObservation}, env, gs_state::GroundStationState, current_time::Int)
@@ -272,15 +329,19 @@ function initialize_ground_station(env, agents; num_states::Int=2)
     agent_plans = Dict{Int, Any}()
     agent_plan_types = Dict{Int, Symbol}()
     agent_observation_history = Dict{Int, Vector{Tuple{Int, Tuple{Int, Int}, EventState}}}()
+    planning_times = Dict{Int, Vector{Float64}}()
+    total_planning_time = 0.0
+    num_plans_computed = 0
     
     for agent in agents
         agent_last_sync[agent.id] = -1  # No sync yet
         agent_plans[agent.id] = nothing
         agent_plan_types[agent.id] = :script
         agent_observation_history[agent.id] = Tuple{Int, Tuple{Int, Int}, EventState}[]
+        planning_times[agent.id] = Float64[]
     end
     
-    return GroundStationState(global_belief, agent_last_sync, agent_plans, agent_plan_types, agent_observation_history, 0)
+    return GroundStationState(global_belief, agent_last_sync, agent_plans, agent_plan_types, agent_observation_history, 0, planning_times, total_planning_time, num_plans_computed)
 end
 
 """
@@ -329,6 +390,45 @@ function print_status(gs_state::GroundStationState)
         else
             println("  Agent $(agent_id): no plan")
         end
+    end
+    
+    # Print planning time statistics
+    print_planning_time_stats(gs_state)
+end
+
+"""
+Print planning time statistics
+"""
+function print_planning_time_stats(gs_state::GroundStationState)
+    if gs_state.num_plans_computed > 0
+        avg_time = gs_state.total_planning_time / gs_state.num_plans_computed
+        println("⏱️  Planning Time Statistics:")
+        println("  Total plans computed: $(gs_state.num_plans_computed)")
+        println("  Total planning time: $(round(gs_state.total_planning_time, digits=3)) seconds")
+        println("  Average planning time: $(round(avg_time, digits=3)) seconds")
+        
+        # Per-agent statistics
+        for (agent_id, times) in gs_state.planning_times
+            if !isempty(times)
+                agent_avg = sum(times) / length(times)
+                agent_min = minimum(times)
+                agent_max = maximum(times)
+                println("  Agent $(agent_id): avg=$(round(agent_avg, digits=3))s, min=$(round(agent_min, digits=3))s, max=$(round(agent_max, digits=3))s ($(length(times)) plans)")
+            end
+        end
+    else
+        println("⏱️  No planning time data available yet")
+    end
+end
+
+"""
+Get average planning time
+"""
+function get_average_planning_time(gs_state::GroundStationState)
+    if gs_state.num_plans_computed > 0
+        return gs_state.total_planning_time / gs_state.num_plans_computed
+    else
+        return 0.0
     end
 end
 

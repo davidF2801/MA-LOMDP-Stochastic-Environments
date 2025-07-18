@@ -106,7 +106,7 @@ function calculate_entropy(probability::Float64)
     if probability <= 0.0 || probability >= 1.0
         return 0.0
     end
-    return -(probability * log(probability) + (1 - probability) * log(1 - probability))
+    return -(probability * log2(probability) + (1 - probability) * log2(1 - probability))
 end
 
 """

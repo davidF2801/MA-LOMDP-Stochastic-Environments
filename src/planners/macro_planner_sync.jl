@@ -292,7 +292,7 @@ calculate_cell_information_gain(prob_vector::Vector{Float64})
 Calculates information gain for a single cell: G(b_k) = H(b_k) * P(event)
 """
 function calculate_cell_information_gain(prob_vector::Vector{Float64})
-    # Calculate entropy: H(b_k) = -∑ p_i * log(p_i)
+    # Calculate entropy: H(b_k) = -∑ p_i * log2(p_i)
     entropy = calculate_entropy_from_distribution(prob_vector)
     
     # Weight by event probability: G(b_k) = H(b_k) * P(event)
@@ -405,13 +405,13 @@ end
 """
 calculate_entropy_from_distribution(prob_vector::Vector{Float64})
 Calculates entropy for a multi-state belief distribution
-H(b_k) = -∑ p_i * log(p_i)
+H(b_k) = -∑ p_i * log2(p_i)
 """
 function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
     entropy = 0.0
     for prob in prob_vector
         if prob > 0.0
-            entropy -= prob * log(prob)
+            entropy -= prob * log2(prob)
         end
     end
     return entropy

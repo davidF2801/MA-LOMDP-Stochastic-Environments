@@ -1,0 +1,27 @@
+# Julia
+*.jl.*.cov
+*.jl.cov
+*.jl.mem
+/deps/deps.jl
+/docs/build/
+Manifest.toml
+
+# Results and output folders
+results/
+results_new/
+visualizations/
+visualizations_new/
+Comparisons/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log 

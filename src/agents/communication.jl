@@ -53,7 +53,7 @@ end
     
 #     if time_step % protocol.communication_frequency == 0
 #         println("Centralized communication at time step $time_step")
-#         # TODO: Implement actual communication logic
+#         # TODO: Implement actual communication log2ic
 #     end
     
 #     return beliefs
@@ -97,7 +97,7 @@ end
     
 #     if time_step % protocol.sync_frequency == 0
 #         println("Hybrid communication with ground station at time step $time_step")
-#         # TODO: Implement actual communication logic
+#         # TODO: Implement actual communication log2ic
 #     end
     
 #     return beliefs
