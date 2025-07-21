@@ -18,6 +18,8 @@ import ..Environment.EventDynamicsModule.DBNTransitionModel2, ..Environment.Even
 # Import belief management functions
 import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
        ..Agents.BeliefManagement.calculate_uncertainty_from_distribution
+# Import utility functions from Types module
+import ..Types.calculate_entropy_from_distribution, ..Types.calculate_cell_information_gain, ..Types.combinations, ..Types.get_transition_probability_rsp
 
 export plan_synchronous_cycle, update_global_belief_sync, evaluate_joint_action_sequence
 
@@ -287,24 +289,6 @@ function calculate_joint_information_gain(belief::Belief, joint_action::Vector{S
     return total_gain - coordination_penalty - observation_cost
 end
 
-"""
-calculate_cell_information_gain(prob_vector::Vector{Float64})
-Calculates information gain for a single cell: G(b_k) = H(b_k) * P(event)
-"""
-function calculate_cell_information_gain(prob_vector::Vector{Float64})
-    # Calculate entropy: H(b_k) = -∑ p_i * log2(p_i)
-    entropy = calculate_entropy_from_distribution(prob_vector)
-    
-    # Weight by event probability: G(b_k) = H(b_k) * P(event)
-    # P(event) is the sum of all event state probabilities (states 2 and beyond)
-    if length(prob_vector) >= 2
-        event_probability = sum(prob_vector[2:end])
-    else
-        event_probability = 0.0
-    end
-    
-    return entropy * event_probability
-end
 
 """
 simulate_joint_step(belief::Belief, joint_action::Vector{SensingAction}, env, agents::Vector{Agent}, timestep_offset::Int)
@@ -402,20 +386,7 @@ function update_global_belief_sync(global_belief::Belief, joint_action::Vector{S
     return updated_belief
 end
 
-"""
-calculate_entropy_from_distribution(prob_vector::Vector{Float64})
-Calculates entropy for a multi-state belief distribution
-H(b_k) = -∑ p_i * log2(p_i)
-"""
-function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
-    entropy = 0.0
-    for prob in prob_vector
-        if prob > 0.0
-            entropy -= prob * log2(prob)
-        end
-    end
-    return entropy
-end
+
 
 """
 get_agent_position_at_time(agent::Agent, env, timestep_offset::Int)
@@ -470,24 +441,6 @@ function get_current_time(env, agent)
     end
 end
 
-"""
-combinations(elements, k)
-Generates combinations of elements.
-"""
-function combinations(elements, k)
-    if k == 0
-        return [Tuple{}[]]
-    elseif k == 1
-        return [[element] for element in elements]
-    else
-        result = []
-        for i in 1:length(elements)
-            for combo in combinations(elements[i+1:end], k-1)
-                push!(result, [elements[i]; combo])
-            end
-        end
-        return result
-    end
-end
+
 
 end # module

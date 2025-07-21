@@ -24,10 +24,10 @@ using Infiltrator
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 10             # Total simulation steps
+const NUM_STEPS = 150             # Total simulation steps
 const PLANNING_MODE = :future_actions         # Use macro-script planning (:script, :policy, :random, :sweep, :greedy, :future_actions)
-const modes = [:future_actions]
-const N_RUNS = 1
+const modes = [:sweep, :script, :random]
+const N_RUNS = 5
 # Planning modes:
 #   :script - Exact belief evolution with macro-script planning
 #   :policy - Policy tree planning
@@ -46,39 +46,30 @@ const DISCOUNT_FACTOR = 0.95        # POMDP discount factor
 
 # 🤖 AGENT PARAMETERS
 const NUM_AGENTS = 2                  # Number of agents (one per row)
-const PLANNING_HORIZON = 5            # Planning horizon for macro-scripts
+const PLANNING_HORIZON = 4            # Planning horizon for macro-scripts
 const SENSOR_FOV = pi/2               # Field of view angle (radians)
 const SENSOR_NOISE = 0.0              # Perfect observations
 
 # 📡 COMMUNICATION PARAMETERS
-const CONTACT_HORIZON = 5             # Steps until next sync opportunity
+const CONTACT_HORIZON = 4             # Steps until next sync opportunity
 const GROUND_STATION_X = 2            # Ground station X position
 const GROUND_STATION_Y = 1            # Ground station Y position
 
 # =============================================================================
-# RSP (Random Spread Process) MODEL PARAMETERS
+# HETEROGENEOUS RSP (Random Spread Process) MODEL PARAMETERS
 # -----------------------------------------------------------------------------
-# These constants control the stochastic event dynamics in the RSP model.
-# Each parameter has a specific meaning in the context of event spread and decay:
+# The environment now uses heterogeneous cell types with different parameters
+# randomly distributed across the grid. Cell types are defined in Types.jl:
 #
-#   RSP_LAMBDA:  Local ignition intensity (λ) - could be λmap[y,x]; 0–1
-#                - Additional ignition probability from local conditions
-#   RSP_BETA0:   Spontaneous (background) ignition probability when no neighbors burn
-#                - Base probability of spontaneous event birth
-#   RSP_ALPHA:   Contagion contribution of each active neighbor
-#                - How much each neighboring event increases birth probability
-#   RSP_DELTA:   Probability the fire persists (EVENT→EVENT)
-#                - Probability of event survival/continuation
-#   RSP_MU:      Probability the fire dies (EVENT→NO_EVENT)
-#                - Probability of event death/extinction
+#   HETEROGENEOUS_CELL_TYPES:
+#   - Immune cells: λ=0.0002, β₀=0.0002, α=0.03, δ=0.05 (events rarely start/die quickly)
+#   - Fleeting events: λ=0.0050, β₀=0.0150, α=0.01, δ=0.99 (ignite occasionally, burn out fast)
+#   - Long-lasting events: λ=0.0020, β₀=0.0020, α=0.01, δ=0.95 (rare ignition, ~10-step lifetime)
+#   - Moderate cells: λ=0.0100, β₀=0.0100, α=0.01, δ=0.99 (balanced ignition and lifetime)
+#   - High-contagion cells: λ=0.0200, β₀=0.0100, α=0.1, δ=0.9 (ignite easily and spread)
 #
-# Tune these parameters to explore different behaviors.
-# -----------------------------------------------------------------------------
-const RSP_LAMBDA = 0.001   # Local ignition intensity (λ)
-const RSP_BETA0  = 0.001   # Spontaneous ignition probability (β₀)
-const RSP_ALPHA  = 0.5   # Contagion contribution per neighbor (α)
-const RSP_DELTA  = 0.8    # Event persistence probability (δ)
-const RSP_MU     = 1.0 - RSP_DELTA  # Event death probability (μ = 1 - δ)
+# Each cell gets randomly assigned one of these types, creating a realistic
+# non-uniform environment with different event behaviors.
 # =============================================================================
 
 # =============================================================================
@@ -104,15 +95,11 @@ using .Planners.GroundStation
 using .Planners.MacroPlannerAsync
 using .Planners.PolicyTreePlanner
 using .Planners.MacroPlannerRandom # Added for random planner
-using .Planners.MacroPlannerAsyncFutureActions # Added for future actions planner
 
 # Import RSP functions
-import .Environment.EventDynamicsModule: transition_rsp!, get_transition_probability_rsp
-import .Agents.BeliefManagement: predict_belief_rsp
-
+import .Environment.EventDynamicsModule: transition_rsp!
 # Import functions from MacroPlannerAsync
 import .MacroPlannerAsync: initialize_uniform_belief, get_known_observations_at_time, has_known_observation, get_known_observation, evolve_no_obs, collapse_belief_to
-import .MacroPlannerAsyncFutureActions: initialize_uniform_belief, get_known_observations_at_time, has_known_observation, get_known_observation, evolve_no_obs, collapse_belief_to
 
 # Import planning time function from GroundStation
 import .GroundStation: get_average_planning_time
@@ -164,12 +151,27 @@ function save_performance_metrics(gs_state, avg_uncertainty, event_observation_p
         # Environment parameters
         println(file, "ENVIRONMENT PARAMETERS:")
         println(file, "  Grid size: $(env.width) x $(env.height)")
-        println(file, "  RSP parameters:")
-        println(file, "    λ (lambda): $(RSP_LAMBDA)")
-        println(file, "    β₀ (beta0): $(RSP_BETA0)")
-        println(file, "    α (alpha): $(RSP_ALPHA)")
-        println(file, "    δ (delta): $(RSP_DELTA)")
-        println(file, "    μ (mu): $(RSP_MU)")
+        println(file, "  RSP parameters: Heterogeneous (cell-specific)")
+        println(file, "  Cell types: $(length(Types.HETEROGENEOUS_CELL_TYPES)) different types")
+        
+        # Print cell type distribution
+        cell_counts, total_cells = Types.analyze_cell_type_distribution(env.rsp_params)
+        println(file, "  Cell type distribution:")
+        for (cell_name, count) in cell_counts
+            percentage = round(100 * count / total_cells, digits=1)
+            println(file, "    $(cell_name): $(count) ($(percentage)%)")
+        end
+        
+        # Print average parameters
+        avg_lambda = mean(env.rsp_params.lambda_map)
+        avg_alpha = mean(env.rsp_params.alpha_map)
+        avg_delta = mean(env.rsp_params.delta_map)
+        avg_mu = mean(env.rsp_params.mu_map)
+        println(file, "  Average parameters:")
+        println(file, "    λ (lambda): $(round(avg_lambda, digits=4))")
+        println(file, "    α (alpha): $(round(avg_alpha, digits=3))")
+        println(file, "    δ (delta): $(round(avg_delta, digits=3))")
+        println(file, "    μ (mu): $(round(avg_mu, digits=3))")
         println(file, "")
         
         # Agent information
@@ -314,7 +316,7 @@ function create_row_agents()
 end
 
 """
-Create test environment with RSP dynamics
+Create test environment with heterogeneous RSP dynamics
 """
 function create_rsp_environment()
     # Create event dynamics (not used for RSP, but required by constructor)
@@ -329,24 +331,29 @@ function create_rsp_environment()
     # Update to RSP dynamics
     env.dynamics = rsp  # Use RSP dynamics (enum value)
     
-    # Create ignition probability map for RSP (using RSP_LAMBDA as base)
-    env.ignition_prob = fill(RSP_LAMBDA, GRID_HEIGHT, GRID_WIDTH)
+    # Create heterogeneous parameter maps
+    param_maps = Types.create_heterogeneous_rsp_maps(GRID_HEIGHT, GRID_WIDTH)
     
-    # Add RSP parameters to environment
-    env.rsp_params = (
-        lambda=RSP_LAMBDA,
-        beta0=RSP_BETA0,
-        alpha=RSP_ALPHA,
-        delta=RSP_DELTA,
-        mu=RSP_MU
-    )
+    # Use lambda map as ignition probability map for backward compatibility
+    env.ignition_prob = param_maps.lambda_map
     
-    println("🌍 Created RSP test environment:")
+    # Add RSP parameter maps to environment
+    env.rsp_params = param_maps
+    
+    println("🌍 Created heterogeneous RSP test environment:")
     println("  Grid: $(GRID_WIDTH)x$(GRID_HEIGHT)")
     println("  Initial events: $(INITIAL_EVENTS)")
     println("  Max sensing targets: $(MAX_SENSING_TARGETS)")
-    println("  Dynamics: RSP (Random Spread Process)")
-    println("  RSP params: $(env.rsp_params)")
+    println("  Dynamics: Heterogeneous RSP (Random Spread Process)")
+    println("  Cell types: $(length(Types.HETEROGENEOUS_CELL_TYPES)) different types randomly distributed")
+    
+    # Print cell type distribution
+    cell_counts, total_cells = Types.analyze_cell_type_distribution(param_maps)
+    println("  Cell type distribution:")
+    for (cell_name, count) in cell_counts
+        percentage = round(100 * count / total_cells, digits=1)
+        println("    $(cell_name): $(count) ($(percentage)%)")
+    end
     
     return env
 end
@@ -354,6 +361,62 @@ end
 # =============================================================================
 # VISUALIZATION FUNCTIONS
 # =============================================================================
+
+"""
+Create and save environment parameter distribution visualization
+"""
+function create_environment_distribution_plot(param_maps::Types.RSPParameterMaps, results_dir::String="", run_number::Int=1)
+    println("🌍 Creating environment parameter distribution visualization...")
+    
+    # Create plots directory path
+    plots_dir = joinpath(results_dir, "Run $(run_number)", "environment")
+    if !isdir(plots_dir)
+        mkpath(plots_dir)
+    end
+    
+    # Create subplots for each parameter
+    p1 = heatmap(param_maps.lambda_map, 
+        title="λ (Ignition Intensity)", 
+        colorbar_title="λ",
+        colormap=:plasma,
+        aspect_ratio=:equal,
+        size=(400, 300))
+    
+    p2 = heatmap(param_maps.alpha_map, 
+        title="α (Contagion Strength)", 
+        colorbar_title="α",
+        colormap=:plasma,
+        aspect_ratio=:equal,
+        size=(400, 300))
+    
+    p3 = heatmap(param_maps.delta_map, 
+        title="δ (Persistence Probability)", 
+        colorbar_title="δ",
+        colormap=:plasma,
+        aspect_ratio=:equal,
+        size=(400, 300))
+    
+    p4 = heatmap(param_maps.mu_map, 
+        title="μ (Death Probability)", 
+        colorbar_title="μ",
+        colormap=:plasma,
+        aspect_ratio=:equal,
+        size=(400, 300))
+    
+    # Combine all plots
+    combined_plot = plot(p1, p2, p3, p4, 
+        layout=(2,2), 
+        size=(800, 600),
+        title="Heterogeneous RSP Environment Parameters - Grid $(GRID_WIDTH)x$(GRID_HEIGHT), Run $(run_number)",
+        titlefontsize=12)
+    
+    # Save the plot
+    plot_filename = joinpath(plots_dir, "environment_parameters_run$(run_number).png")
+    savefig(combined_plot, plot_filename)
+    println("✓ Saved environment distribution plot: $(basename(plot_filename))")
+    
+    return combined_plot
+end
 
 """
 Visualize the current state of the environment and agents
@@ -532,7 +595,7 @@ function create_uncertainty_visualizations(
     )
     
     # Add horizontal line for uniform distribution entropy (log2(2) ≈ 0.693)
-    hline!([0.693], color=:red, linestyle=:dash, linewidth=1, label="Uniform Distribution")
+    hline!([1], color=:red, linestyle=:dash, linewidth=1, label="Uniform Distribution")
     
     # Save the plot with new naming convention
     plot_filename = joinpath(plots_dir, "uncertainty_evolution_$(planning_mode)_run$(run_number).png")
@@ -674,9 +737,9 @@ end
 """
 Calculate Normalized Detection Delay (lifetime-normalized)
 NDD_life = (1/|E_det|) * sum_{e in E_det} (t_detect(e) - t_start(e)) / E[L_e]
-where E[L_e] is the expected duration of event e
+where E[L_e] is the expected duration of event e based on the specific cell where it occurred
 """
-function calculate_normalized_detection_delay_lifetime(event_tracker::EventTracker)
+function calculate_normalized_detection_delay_lifetime(event_tracker::EventTracker, env)
     detected_events = filter(e -> e[:observed], collect(values(event_tracker.event_registry)))
     
     if isempty(detected_events)
@@ -690,11 +753,18 @@ function calculate_normalized_detection_delay_lifetime(event_tracker::EventTrack
         t_start = event[:start_time]
         t_detect = event[:detection_time]  # We need to track this
         
-        # Calculate expected lifetime E[L_e] for RSP events
+        # Get the cell where this event occurred
+        cell = event[:cell]
+        x, y = cell
+        
+        # Get cell-specific parameters for this event
+        cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
+        
+        # Calculate expected lifetime E[L_e] for RSP events using cell-specific parameters
         # For RSP, E[L] = 1/μ where μ is the death probability
-        # From the RSP parameters: μ = 1 - δ
-        μ = 1.0 - RSP_DELTA
-        expected_lifetime = 1.0 / μ
+        # μ = 1 - δ for the specific cell
+        cell_mu = 1.0 - cell_params.delta
+        expected_lifetime = 1.0 / cell_mu
         
         # Calculate normalized delay for this event
         detection_delay = t_detect - t_start
@@ -712,7 +782,7 @@ end
 """
 Calculate Normalized Detection Delay (lifetime-normalized) for enhanced tracker
 """
-function calculate_normalized_detection_delay_lifetime(event_tracker::EnhancedEventTracker)
+function calculate_normalized_detection_delay_lifetime(event_tracker::EnhancedEventTracker, env)
     detected_events = filter(e -> e[:observed], collect(values(event_tracker.event_registry)))
     
     if isempty(detected_events)
@@ -726,11 +796,18 @@ function calculate_normalized_detection_delay_lifetime(event_tracker::EnhancedEv
         t_start = event[:start_time]
         t_detect = event[:detection_time]  # We need to track this
         
-        # Calculate expected lifetime E[L_e] for RSP events
+        # Get the cell where this event occurred
+        cell = event[:cell]
+        x, y = cell
+        
+        # Get cell-specific parameters for this event
+        cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
+        
+        # Calculate expected lifetime E[L_e] for RSP events using cell-specific parameters
         # For RSP, E[L] = 1/μ where μ is the death probability
-        # From the RSP parameters: μ = 1 - δ
-        μ = 1.0 - RSP_DELTA
-        expected_lifetime = 1.0 / μ
+        # μ = 1 - δ for the specific cell
+        cell_mu = 1.0 - cell_params.delta
+        expected_lifetime = 1.0 / cell_mu
         
         # Calculate normalized delay for this event
         detection_delay = t_detect - t_start
@@ -856,8 +933,8 @@ function simulate_rsp_environment(env, num_steps::Int,  planning_mode::Symbol)
     for step in 1:num_steps
         new_state = similar(current_state)
         
-        # Use RSP transition, passing RSP parameters from env
-        transition_rsp!(new_state, current_state, env.ignition_prob, Random.GLOBAL_RNG; rsp_params=env.rsp_params)
+        # Use heterogeneous RSP transition with parameter maps
+        transition_rsp!(new_state, current_state, env.rsp_params, Random.GLOBAL_RNG)
         
         current_state = new_state
         push!(evolution, copy(current_state))
@@ -884,18 +961,19 @@ function simulate_rsp_environment(env, num_steps::Int,  planning_mode::Symbol)
                 end
             end
             
+            # Get cell-specific parameters
+            cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
+            
             prob_no_event = get_transition_probability_rsp(1, current_cell_state, neighbor_states;
-                λ=env.rsp_params.lambda,
-                β0=env.rsp_params.beta0,
-                α=env.rsp_params.alpha,
-                δ=env.rsp_params.delta,
-                μ=env.rsp_params.mu)
+                λ=cell_params.lambda,
+                β0=cell_params.beta0,
+                α=cell_params.alpha,
+                δ=cell_params.delta)
             prob_event = get_transition_probability_rsp(2, current_cell_state, neighbor_states;
-                λ=env.rsp_params.lambda,
-                β0=env.rsp_params.beta0,
-                α=env.rsp_params.alpha,
-                δ=env.rsp_params.delta,
-                μ=env.rsp_params.mu)
+                λ=cell_params.lambda,
+                β0=cell_params.beta0,
+                α=cell_params.alpha,
+                δ=cell_params.delta)
             println("  Current state: $(current_cell_state == 1 ? "NO_EVENT" : "EVENT_PRESENT")")
             println("  Active neighbors: $(count(x -> x == 2, neighbor_states))")
             println("  P(NO_EVENT): $(round(prob_no_event, digits=3))")
@@ -1049,9 +1127,9 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
             push!(average_uncertainty_per_timestep, avg_uncertainty)
         else
             # If no global belief yet, use uniform uncertainty
-            uniform_uncertainty = fill(0.693, GRID_HEIGHT, GRID_WIDTH)  # log2(2) for uniform distribution
+            uniform_uncertainty = fill(1, GRID_HEIGHT, GRID_WIDTH)  # log2(2) for uniform distribution
             push!(uncertainty_evolution, uniform_uncertainty)
-            push!(average_uncertainty_per_timestep, 0.693)
+            push!(average_uncertainty_per_timestep, 1)
         end
         
         # Update environment using replay (not POMDP transition)
@@ -1076,7 +1154,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     event_observation_percentage = total_events > 0 ? (observed_events / total_events) * 100.0 : 0.0
     
     # Calculate Normalized Detection Delay (lifetime-normalized)
-    ndd_life = calculate_normalized_detection_delay_lifetime(event_tracker)
+    ndd_life = calculate_normalized_detection_delay_lifetime(event_tracker, env)
     
     # Print final results
     println("\n📈 RSP Simulation Results (Replay)")
@@ -1142,8 +1220,8 @@ function simulate_environment_once(num_steps::Int)
     for step in 1:num_steps
         new_state = similar(current_state)
         
-        # Use RSP transition
-        transition_rsp!(new_state, current_state, env.ignition_prob, Random.GLOBAL_RNG; rsp_params=env.rsp_params)
+        # Use heterogeneous RSP transition with parameter maps
+        transition_rsp!(new_state, current_state, env.rsp_params, Random.GLOBAL_RNG)
         
         current_state = new_state
         push!(event_evolution, copy(current_state))
@@ -1202,11 +1280,11 @@ end
 
 println("📁 Results will be saved in: $(results_base_dir)")
 
-# Simulate environment once for fair comparison
-println("\n🔥 Simulating environment once for replay system...")
-replay_env = simulate_environment_once(NUM_STEPS)
 
 for n in 1:N_RUNS
+    # Simulate environment once for fair comparison
+    println("\n🔥 Simulating environment once for replay system...")
+    replay_env = simulate_environment_once(NUM_STEPS)
     for mode in modes
         PLANNING_MODE = mode
         println("🎯 RSP 3x2 Row Visibility Test")
@@ -1216,12 +1294,15 @@ for n in 1:N_RUNS
         println("  Agents: $(NUM_AGENTS) (rows 1 and 3)")
         println("  Planning horizon: $(PLANNING_HORIZON)")
         println("  Planning mode: $(PLANNING_MODE) (:script, :policy, :random, :sweep, :greedy, :future_actions)")
-        println("  Dynamics: RSP (Replay)")
+        println("  Dynamics: Heterogeneous RSP (Replay)")
         println("  Row-only visibility: true")
         println("  Run: $(n)/5")
 
         # Debug: show agent positions and trajectories
         debug_agent_positions(replay_env.env.agents)
+
+        # Create environment distribution visualization
+        create_environment_distribution_plot(replay_env.env.rsp_params, results_base_dir, n)
 
         # Run the simulation with replay
         gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, avg_uncertainty, ndd_life = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, mode)

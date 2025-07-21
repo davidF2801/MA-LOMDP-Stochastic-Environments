@@ -20,7 +20,7 @@ export update_belief_state, initialize_belief, predict_belief_evolution_dbn,
        predict_belief_rsp, evolve_no_obs, get_neighbor_beliefs, enumerate_joint_states,
        product, normalize_belief_distributions, collapse_belief_to, 
        enumerate_all_possible_outcomes, merge_equivalent_beliefs, beliefs_are_equivalent, calculate_cell_entropy,
-       get_event_probability, calculate_entropy_from_distribution, clear_belief_evolution_cache!,
+       get_event_probability, clear_belief_evolution_cache!,
        get_cache_stats
 
 # Belief type is now defined in Types module
@@ -391,21 +391,8 @@ end
 #     )
 # end
 
-# Add helper function for RSP transition probability in belief evolution
-function get_rsp_transition_probability_belief(next_state, current_state, neighbor_states, params)
-    λ = params.lambda
-    β0 = params.beta0
-    α = params.alpha
-    δ = params.delta
-    μ = params.mu
-    active_nbrs = count(x -> x == 1, neighbor_states)  # 1 = EVENT_PRESENT
-    if current_state == 0  # NO_EVENT
-        birth_p = clamp(β0 + λ + α * active_nbrs, 0.0, 1.0)
-        return next_state == 1 ? birth_p : 1.0 - birth_p
-    else  # current_state == 1 (EVENT_PRESENT)
-        return next_state == 1 ? δ : (next_state == 0 ? μ : 0.0)
-    end
-end
+# Import utility functions from Types module
+import ..Types.get_transition_probability_rsp, ..Types.calculate_entropy_from_distribution, ..Types.calculate_cell_information_gain, ..Types.combinations
 
 # Global cache for belief evolution to avoid redundant computations
 const BELIEF_EVOLUTION_CACHE = Dict{String, Belief}()
@@ -476,13 +463,16 @@ function evolve_no_obs(B::Belief, env)
         # Get neighbor beliefs
         neighbor_beliefs = get_neighbor_beliefs(B, x, y)
         
+        # Get cell-specific parameters for this cell
+        cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
+        
         # Apply Díaz-Avalos evolution for each possible next state
         for next_state in 1:num_states
             prob = 0.0
             for current_state in 1:num_states
                 for neighbor_states in enumerate_joint_states(neighbor_beliefs, num_states)
-                    params = env.rsp_params
-                    p_trans = get_rsp_transition_probability_belief(next_state - 1, current_state - 1, neighbor_states .- 1, params)
+                    p_trans = get_transition_probability_rsp(next_state - 1, current_state - 1, neighbor_states .- 1;
+                    λ=cell_params.lambda, β0=cell_params.beta0, α=cell_params.alpha, δ=cell_params.delta)
                     p_belief = current_belief[current_state] * product([neighbor_beliefs[i][neighbor_states[i]] for i in 1:length(neighbor_beliefs)])
                     prob += p_trans * p_belief
                 end
@@ -712,18 +702,6 @@ function get_event_probability(B::Belief, cell::Tuple{Int, Int})
     end
 end
 
-"""
-Calculate entropy for a multi-state belief distribution
-H(b_k) = -∑ p_i * log2(p_i)
-"""
-function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
-    entropy = 0.0
-    for prob in prob_vector
-        if prob > 0.0
-            entropy -= prob * log2(prob)
-        end
-    end
-    return entropy
-end
+
 
 end # module 

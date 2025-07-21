@@ -10,7 +10,6 @@ using ..Agents
 
 # Import planner modules
 include("macro_planner_async.jl")
-include("macro_planner_async_future_actions.jl")
 include("policy_tree_planner.jl")
 include("macro_planner_random.jl")
 include("macro_planner_sweep.jl")
@@ -19,7 +18,6 @@ include("macro_planner_greedy.jl")
 using .MacroPlannerAsync
 using .PolicyTreePlanner
 using .MacroPlannerRandom
-using .MacroPlannerAsyncFutureActions
 using .MacroPlannerSweep
 using .MacroPlannerGreedy
 
@@ -133,9 +131,8 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("⏱️  Agent $(agent_id) random planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :future_actions
                 println("🔮 Computing future actions for agent $(agent_id)")
-                new_plan, planning_time = MacroPlannerAsyncFutureActions.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                new_plan, planning_time = MacroPlannerAsync.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng, mode=:future_actions)
                 gs_state.agent_plan_types[agent_id] = :future_actions
-                
                 # Track planning time
                 push!(gs_state.planning_times[agent_id], planning_time)
                 gs_state.total_planning_time += planning_time

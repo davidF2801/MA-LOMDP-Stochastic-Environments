@@ -609,22 +609,8 @@ function calculate_entropy(probability::Float64)
 end
 
 """
-calculate_entropy_from_distribution(prob_vector::Vector{Float64})
-Calculates entropy for a multi-state probability distribution
-"""
-function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
-    entropy = 0.0
-    for prob in prob_vector
-        if prob > 0.0
-            entropy -= prob * log2(prob)
-        end
-    end
-    return entropy
-end
-
-"""
 calculate_posterior_probability(prior_prob::Float64, observed_state::EventState)
-Calculates posterior probability given observation without modifying the original belief
+#Calculates posterior probability given observation without modifying the original belief
 """
 function calculate_posterior_probability(prior_prob::Float64, observed_state::EventState)
     if observed_state == EVENT_PRESENT
