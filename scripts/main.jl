@@ -24,10 +24,10 @@ using Infiltrator
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 150             # Total simulation steps
+const NUM_STEPS = 100             # Total simulation steps
 const PLANNING_MODE = :future_actions         # Use macro-script planning (:script, :policy, :random, :sweep, :greedy, :future_actions)
-const modes = [:sweep, :script, :random]
-const N_RUNS = 5
+const modes = [:macro_approx, :greedy, :sweep]
+const N_RUNS = 2
 # Planning modes:
 #   :script - Exact belief evolution with macro-script planning
 #   :policy - Policy tree planning
@@ -35,6 +35,7 @@ const N_RUNS = 5
 #   :sweep - Systematic sweep over columns in each row
 #   :greedy - Greedy selection maximizing entropy * event_probability
 #   :future_actions - Exact planning considering other agents' possible future actions
+#   :macro_approx - Approximate macro-script planning with branch pruning (uses MAX_PROB_MASS threshold)
 
 # 🌍 ENVIRONMENT PARAMETERS
 const GRID_WIDTH = 3                  # Grid width (columns)
@@ -43,6 +44,7 @@ const INITIAL_EVENTS = 1              # Number of initial events
 const MAX_SENSING_TARGETS = 1         # Maximum cells an agent can sense per step
 const SENSOR_RANGE = 0.0              # Sensor range for agents (0.0 = row-only visibility)
 const DISCOUNT_FACTOR = 0.95        # POMDP discount factor
+const MAX_PROB_MASS = 0.97            # Maximum probability mass to keep when pruning belief branches (for macro_approx)
 
 # 🤖 AGENT PARAMETERS
 const NUM_AGENTS = 2                  # Number of agents (one per row)
@@ -326,7 +328,7 @@ function create_rsp_environment()
     agents = create_row_agents()
     
     # Create spatial grid environment with RSP dynamics
-    env = SpatialGrid(GRID_WIDTH, GRID_HEIGHT, event_dynamics, agents, SENSOR_RANGE, DISCOUNT_FACTOR, INITIAL_EVENTS, MAX_SENSING_TARGETS, (GROUND_STATION_X, GROUND_STATION_Y))
+    env = SpatialGrid(GRID_WIDTH, GRID_HEIGHT, event_dynamics, agents, SENSOR_RANGE, DISCOUNT_FACTOR, INITIAL_EVENTS, MAX_SENSING_TARGETS, (GROUND_STATION_X, GROUND_STATION_Y), nothing, MAX_PROB_MASS)
     
     # Update to RSP dynamics
     env.dynamics = rsp  # Use RSP dynamics (enum value)
@@ -1273,7 +1275,8 @@ end
 
 # Create main results directory with timestamp
 timestamp = replace(string(now()), ":" => "-", "." => "-")
-results_base_dir = joinpath("results", "run_$(timestamp)")
+# Create results directory at project root (relative to this file's location)
+results_base_dir = joinpath(@__DIR__, "..", "results", "run_$(timestamp)")
 if !isdir(results_base_dir)
     mkpath(results_base_dir)
 end
@@ -1293,7 +1296,10 @@ for n in 1:N_RUNS
         println("  Grid: $(GRID_WIDTH)x$(GRID_HEIGHT)")
         println("  Agents: $(NUM_AGENTS) (rows 1 and 3)")
         println("  Planning horizon: $(PLANNING_HORIZON)")
-        println("  Planning mode: $(PLANNING_MODE) (:script, :policy, :random, :sweep, :greedy, :future_actions)")
+        println("  Planning mode: $(PLANNING_MODE) (:script, :policy, :random, :sweep, :greedy, :future_actions, :macro_approx)")
+        if PLANNING_MODE == :macro_approx
+            println("  Max probability mass: $(MAX_PROB_MASS) (branch pruning threshold)")
+        end
         println("  Dynamics: Heterogeneous RSP (Replay)")
         println("  Row-only visibility: true")
         println("  Run: $(n)/5")

@@ -176,13 +176,14 @@ mutable struct SpatialGrid <: POMDP{GridState, SensingAction, GridObservation}
     ignition_prob::Union{Matrix{Float64}, Nothing}  # Ignition probability map for RSP
     pre_enumerated_worlds::Union{Vector{Tuple{Vector{EventMap}, Float64}}, Nothing}  # Pre-computed world trajectories
     rsp_params::Any  # Add RSP parameters (NamedTuple or nothing)
+    max_prob_mass::Float64  # Maximum probability mass to keep when pruning belief branches
 end
 
 """
 Constructor for SpatialGrid with rectangular dimensions
 """
 function SpatialGrid(width::Int, height::Int, event_dynamics::EventDynamics, agents::Vector{Agent}, 
-                    sensor_range::Float64, discount::Float64, initial_events::Int, max_sensing_targets::Int, ground_station_pos::Tuple{Int,Int}, rsp_params=nothing)
+                    sensor_range::Float64, discount::Float64, initial_events::Int, max_sensing_targets::Int, ground_station_pos::Tuple{Int,Int}, rsp_params=nothing, max_prob_mass::Float64=0.95)
     # Create locality functions for each agent
     locality_functions = Vector{LocalityFunction}()
     for agent in agents
@@ -190,14 +191,14 @@ function SpatialGrid(width::Int, height::Int, event_dynamics::EventDynamics, age
         push!(locality_functions, locality)
     end
     
-    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing, rsp_params)
+    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing, rsp_params, max_prob_mass)
 end
 
 """
 Constructor for SpatialGrid with TwoStateEventDynamics (converts to EventDynamics)
 """
 function SpatialGrid(width::Int, height::Int, agents::Vector{Agent}, 
-                    two_state_dynamics::TwoStateEventDynamics, locality_functions::Vector{LocalityFunction}, ground_station_pos::Tuple{Int,Int})
+                    two_state_dynamics::TwoStateEventDynamics, locality_functions::Vector{LocalityFunction}, ground_station_pos::Tuple{Int,Int}, max_prob_mass::Float64=0.95)
     # Convert TwoStateEventDynamics to EventDynamics
     event_dynamics = EventDynamics(
         two_state_dynamics.birth_rate,
@@ -213,15 +214,15 @@ function SpatialGrid(width::Int, height::Int, agents::Vector{Agent},
     initial_events = 1
     max_sensing_targets = 1
     
-    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing)
+    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing, max_prob_mass)
 end
 
 """
 Convenience constructor for square grids
 """
 function SpatialGrid(grid_size::Int, event_dynamics::EventDynamics, agents::Vector{Agent}, 
-                    sensor_range::Float64, discount::Float64, initial_events::Int, max_sensing_targets::Int, ground_station_pos::Tuple{Int,Int})
-    return SpatialGrid(grid_size, grid_size, event_dynamics, agents, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos)
+                    sensor_range::Float64, discount::Float64, initial_events::Int, max_sensing_targets::Int, ground_station_pos::Tuple{Int,Int}, max_prob_mass::Float64=0.95)
+    return SpatialGrid(grid_size, grid_size, event_dynamics, agents, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, nothing, max_prob_mass)
 end
 
 # POMDP interface functions

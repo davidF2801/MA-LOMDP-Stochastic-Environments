@@ -10,12 +10,14 @@ using ..Agents
 
 # Import planner modules
 include("macro_planner_async.jl")
+include("macro_planner_approx.jl")
 include("policy_tree_planner.jl")
 include("macro_planner_random.jl")
 include("macro_planner_sweep.jl")
 include("macro_planner_greedy.jl")
 
 using .MacroPlannerAsync
+using .MacroPlannerAsyncApprox
 using .PolicyTreePlanner
 using .MacroPlannerRandom
 using .MacroPlannerSweep
@@ -117,8 +119,14 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("⏱️  Agent $(agent_id) planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :policy
                 println("🌳 Computing policy tree for agent $(agent_id)")
-                new_plan = PolicyTreePlanner.best_policy_tree(env, gs_state.global_belief, agent, C_i, other_plans, rng=rng)
+                new_plan, planning_time = PolicyTreePlanner.best_policy_tree(env, gs_state.global_belief, agent, C_i, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :policy
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) policy tree planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :random
                 println("🎲 Computing random plan for agent $(agent_id)")
                 new_plan, planning_time = MacroPlannerRandom.best_script_random(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
@@ -158,6 +166,16 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 gs_state.total_planning_time += planning_time
                 gs_state.num_plans_computed += 1
                 println("⏱️  Agent $(agent_id) greedy planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :macro_approx
+                println("🔧 Computing macro-approximate plan for agent $(agent_id)")
+                new_plan, planning_time = MacroPlannerAsyncApprox.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :macro_approx
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) macro-approximate planning time: $(round(planning_time, digits=3)) seconds")
             else
                 error("Unknown planning mode: $(planning_mode)")
             end

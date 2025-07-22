@@ -307,10 +307,6 @@ Common utility functions for the MA-LOMDP project
             norm_active       = isempty(neighbor_states) ? 0.0 :
             active_neighbours / length(neighbor_states)  # 0 … 1
             contagion = 1 - exp(-α * norm_active)          
-            if contagion>0.0
-                @infiltrate
-            end                # 0 … <1
-
             # ---------------------------------------------------------------------
             # 3. State-dependent transition probability
             # ---------------------------------------------------------------------
@@ -549,7 +545,6 @@ function analyze_cell_type_distribution(param_maps::RSPParameterMaps)
     for cell_type in HETEROGENEOUS_CELL_TYPES
         cell_counts[cell_type.name] = 0
     end
-    @infiltrate
     for y in 1:height, x in 1:width
         lambda = param_maps.lambda_map[y, x]
         beta0 = param_maps.beta0_map[y, x]
@@ -567,7 +562,6 @@ function analyze_cell_type_distribution(param_maps::RSPParameterMaps)
             end
         end
     end
-    @infiltrate
     return cell_counts, total_cells
 end
 

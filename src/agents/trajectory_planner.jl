@@ -123,15 +123,64 @@ get_action_from_tree(policy_tree, local_obs_history::Vector{GridObservation})
 Gets the appropriate action from a policy tree based on observation history
 """
 function get_action_from_tree(policy_tree, local_obs_history::Vector{GridObservation})
-    # TODO: Implement policy tree traversal based on observation history
-    # For now, return the first available action or nothing
-    if isempty(policy_tree)
-        return nothing
+    # Traverse the policy tree based on observation history
+    current_node = policy_tree
+    
+    # Follow the tree based on recent observations
+    for obs in local_obs_history
+        # Find the child node that matches this observation
+        matching_child = nothing
+        
+        for (child_obs, child_node) in current_node.children
+            # Check if this child's observation matches our observation
+            if observations_match(child_obs, obs)
+                matching_child = child_node
+                break
+            end
+        end
+        
+        if matching_child !== nothing
+            current_node = matching_child
+        else
+            # No matching child found, stay at current node
+            break
+        end
     end
     
-    # Simple implementation: return first action in tree
-    # In a real implementation, this would traverse the tree based on observations
-    return first(policy_tree)
+    # Return the action at the current node
+    return current_node.action
+end
+
+"""
+observations_match(tree_obs::Vector{Tuple{Tuple{Int, Int}, EventState}}, actual_obs::GridObservation)
+Check if the tree observation matches the actual observation
+"""
+function observations_match(tree_obs::Vector{Tuple{Tuple{Int, Int}, EventState}}, actual_obs::GridObservation)
+    # Convert actual observation to the same format as tree observations
+    actual_obs_formatted = Vector{Tuple{Tuple{Int, Int}, EventState}}()
+    
+    for (i, cell) in enumerate(actual_obs.sensed_cells)
+        if i <= length(actual_obs.event_states)
+            push!(actual_obs_formatted, (cell, actual_obs.event_states[i]))
+        end
+    end
+    
+    # Check if the observations match
+    if length(tree_obs) != length(actual_obs_formatted)
+        return false
+    end
+    
+    # Sort both observations to ensure order doesn't matter
+    sorted_tree_obs = sort(tree_obs, by = x -> x[1])
+    sorted_actual_obs = sort(actual_obs_formatted, by = x -> x[1])
+    
+    for (tree_obs_item, actual_obs_item) in zip(sorted_tree_obs, sorted_actual_obs)
+        if tree_obs_item != actual_obs_item
+            return false
+        end
+    end
+    
+    return true
 end
 
 """
@@ -146,8 +195,8 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
         return SensingAction(agent_id, Tuple{Int, Int}[], false)
     end
     
-    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy
-        # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, or greedy sequence
+    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx
+        # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, greedy sequence, or macro-approximate sequence
         if !isempty(plan)
             # Get the action at the current plan index
             if agent.plan_index <= length(plan)
