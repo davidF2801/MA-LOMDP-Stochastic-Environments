@@ -29,7 +29,7 @@ println("📊 Starting postprocessing analysis...")
 # =============================================================================
 
 # Specific results directory to analyze
-TARGET_RUN = "run_2025-07-20T22-55-38-207"
+TARGET_RUN = "run_2025-07-29T13-22-23-305"
 RESULTS_DIR = joinpath("..", "results", TARGET_RUN)
 OUTPUT_DIR = RESULTS_DIR  # Save results in the same folder we're reading from
 
@@ -37,7 +37,9 @@ OUTPUT_DIR = RESULTS_DIR  # Save results in the same folder we're reading from
 METRICS = [:event_observation_percentage, :ndd_life, :final_uncertainty]
 
 # Planning modes to compare
-PLANNING_MODES = [:sweep, :script, :random]
+#PLANNING_MODES = [:sweep, :script, :random]
+PLANNING_MODES = [:script,:prior_based, :macro_approx_099, :macro_approx_095, :macro_approx_090, :sweep]
+
 
 # =============================================================================
 # DATA EXTRACTION FUNCTIONS
@@ -336,10 +338,12 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
             xlabel="Planning Mode",
             ylabel=metric_title,
             xticks=(1:length(PLANNING_MODES), [string(m) for m in PLANNING_MODES]),
+            xrotation=45,
             legend=false,
             grid=true,
             size=(600, 400),
-            titlefontsize=16)
+            titlefontsize=16,
+            bottom_margin=10Plots.mm)
         
         # Save plot
         plot_filename = joinpath(output_dir, "boxplot_$(metric).png")
@@ -429,6 +433,71 @@ function create_uncertainty_evolution_plots(all_data::Dict{String, Dict}, output
             println("    ✓ Saved: $(basename(plot_filename))")
         end
     end
+end
+
+"""
+Create simple average uncertainty evolution comparison plot
+"""
+function create_average_uncertainty_comparison(all_data::Dict{String, Dict}, output_dir::String)
+    println("📈 Creating average uncertainty evolution comparison plot...")
+    
+    # Create plot
+    p = plot()
+    
+    # Plot each mode
+    for mode in PLANNING_MODES
+        # Collect all uncertainty evolutions for this mode across all timestamps and runs
+        all_evolutions = Vector{Vector{Float64}}()
+        
+        for (timestamp, timestamp_data) in all_data
+            if haskey(timestamp_data, mode)
+                for (run_num, run_data) in timestamp_data[mode]
+                    if !isempty(run_data[:uncertainty_evolution])
+                        push!(all_evolutions, run_data[:uncertainty_evolution])
+                    end
+                end
+            end
+        end
+        
+        if !isempty(all_evolutions)
+            # Calculate mean and std across all runs
+            max_length = maximum(length.(all_evolutions))
+            padded_evolutions = [vcat(ev, fill(NaN, max_length - length(ev))) for ev in all_evolutions]
+            evolution_matrix = hcat(padded_evolutions...)
+            
+            # Calculate statistics
+            means = [mean(skipmissing(evolution_matrix[i, :])) for i in 1:max_length]
+            stds = [std(skipmissing(evolution_matrix[i, :])) for i in 1:max_length]
+            
+            # Plot mean with confidence interval
+            time_points = 1:max_length
+            plot!(p, time_points, means, 
+                ribbon=stds,
+                label=string(mode),
+                linewidth=3,
+                fillalpha=0.2,
+                marker=:circle,
+                markersize=4)
+        end
+    end
+    
+    # Customize plot
+    plot!(p, 
+        title="Average Uncertainty Evolution Comparison",
+        xlabel="Time Step",
+        ylabel="Average Uncertainty (Entropy)",
+        legend=true,
+        grid=true,
+        size=(900, 600),
+        titlefontsize=16,
+        legendfontsize=12)
+    
+    # Save plot
+    plot_filename = joinpath(output_dir, "average_uncertainty_comparison.png")
+    savefig(p, plot_filename)
+    println("    ✓ Saved: $(basename(plot_filename))")
+    
+    return p
 end
 
 """
@@ -547,7 +616,9 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
                 legend=false,
                 grid=true,
                 size=(400, 300),
-                titlefontsize=16)
+                titlefontsize=16,
+                xrotation=45,
+                bottom_margin=10Plots.mm)
             
             # Add value labels on bars with better positioning
             for (j, val) in enumerate(values)
@@ -655,9 +726,11 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
             xlabel="Planning Mode",
             ylabel=metric_title,
             xticks=(1:length(PLANNING_MODES), [string(m) for m in PLANNING_MODES]),
+            xrotation=45,
             legend=false,
             grid=true,
-            titlefontsize=12)
+            titlefontsize=12,
+            bottom_margin=10Plots.mm)
     end
     
     # Combine plots
@@ -733,6 +806,9 @@ function main()
     # Create uncertainty evolution plots
     create_uncertainty_evolution_plots(all_data, output_dir)
     
+    # Create average uncertainty evolution comparison plot
+    create_average_uncertainty_comparison(all_data, output_dir)
+    
     # Create combined comparison
     create_combined_comparison(all_data, output_dir)
     
@@ -767,6 +843,7 @@ function main()
     println("  - Averages bar plot: 1 overview of run averages")
     println("  - Bar plots: $(length(METRICS)) metric comparisons")
     println("  - Uncertainty evolution: $(length(all_data)) timestamp plots")
+    println("  - Average uncertainty comparison: 1 combined plot")
     println("  - Combined comparison: 1 overview plot")
     println("  - Summary statistics: CSV table")
     println("  - Run averages: Text file with averages")

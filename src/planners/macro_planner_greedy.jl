@@ -10,7 +10,7 @@ import ..Agents.BeliefManagement: sample_from_belief
 # Import types from the parent module (Planners)
 import ..EventState, ..NO_EVENT, ..EVENT_PRESENT
 import ..EventState2, ..NO_EVENT_2, ..EVENT_PRESENT_2
-import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..RangeLimitedSensor, ..EventMap
+import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..ComplexTrajectory, ..RangeLimitedSensor, ..EventMap
 # Import trajectory functions
 import ..Agents.TrajectoryPlanner.get_position_at_time
 # Import belief management functions
@@ -51,7 +51,7 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
 end
 
 """
-Generate a greedy sequence for the agent with observation branching
+Generate a greedy sequence for the agent with observation branching and battery constraints
 """
 function generate_greedy_sequence(agent, env, C::Int, belief::Belief, gs_state)
     if C == 0
@@ -62,6 +62,9 @@ function generate_greedy_sequence(agent, env, C::Int, belief::Belief, gs_state)
     
     # Start with the updated ground station belief (after incorporating agent observations)
     current_belief_branches = [(deepcopy(belief), 1.0)]
+    
+    # Track battery evolution
+    current_battery = agent.battery_level
     
     for t in 1:C
         # Get agent's position at this timestep (t-1 because we're planning for timesteps 1 to C)
@@ -78,6 +81,12 @@ function generate_greedy_sequence(agent, env, C::Int, belief::Belief, gs_state)
         best_value = -Inf
         
         for cell in available_cells
+            # Check battery feasibility for this cell
+            action = SensingAction(agent.id, [cell], false)
+            if !check_battery_feasible(agent, action, current_battery)
+                continue  # Skip this cell if not battery feasible
+            end
+            
             # Calculate expected entropy for this cell by branching over observation outcomes
             expected_entropy = 0.0
             
@@ -109,7 +118,10 @@ function generate_greedy_sequence(agent, env, C::Int, belief::Belief, gs_state)
         if best_cell !== nothing
             action = SensingAction(agent.id, [best_cell], false)
             push!(greedy_sequence, action)
-            @infiltrate
+            
+            # Update battery level
+            current_battery = simulate_battery_evolution(agent, action, current_battery)
+            
             # Branch over observation outcomes for the selected action
             new_belief_branches = Vector{Tuple{Belief, Float64}}()
             
@@ -138,9 +150,12 @@ function generate_greedy_sequence(agent, env, C::Int, belief::Belief, gs_state)
             current_belief_branches = merge_equivalent_beliefs(new_belief_branches)
             
         else
-            # Fallback to wait action if no good cell found
+            # Fallback to wait action if no good cell found or no battery feasible cells
             action = SensingAction(agent.id, Tuple{Int, Int}[], false)
             push!(greedy_sequence, action)
+            
+            # Update battery level (charging only)
+            current_battery = simulate_battery_evolution(agent, action, current_battery)
             
             # Just evolve all belief branches without observations
             new_belief_branches = Vector{Tuple{Belief, Float64}}()
@@ -149,14 +164,14 @@ function generate_greedy_sequence(agent, env, C::Int, belief::Belief, gs_state)
                 push!(new_belief_branches, (B_next, prob_branch))
             end
             current_belief_branches = new_belief_branches
-            @infiltrate
         end
     end
     
-    println("🔄 Generated greedy sequence with observation branching for agent $(agent.id):")
+    println("🔄 Generated greedy sequence with observation branching and battery constraints for agent $(agent.id):")
     println("  Agent trajectory: starts in row $(get_position_at_time(agent.trajectory, 0, agent.phase_offset)[2])")
     println("  Sequence: $(length(greedy_sequence)) actions")
     println("  Final belief branches: $(length(current_belief_branches))")
+    println("  Final battery level: $(round(current_battery, digits=2))")
     
     return greedy_sequence
 end
@@ -186,8 +201,20 @@ function get_field_of_regard_at_position(agent, position, env)
     x, y = position
     fov_cells = Tuple{Int, Int}[]
     
-    # Check if we want row-only visibility (sensor range = 0 means row-only)
-    if agent.sensor.range == 0.0
+    # Check sensor pattern
+    if agent.sensor.pattern == :cross
+        # Cross-shaped sensor: agent's position and adjacent cells
+        ax, ay = position
+        for dx in -1:1, dy in -1:1
+            nx, ny = ax + dx, ay + dy
+            if 1 <= nx <= env.width && 1 <= ny <= env.height
+                # Only include cross pattern (not diagonal)
+                if (dx == 0 && dy == 0) || (dx == 0 && dy != 0) || (dx != 0 && dy == 0)
+                    push!(fov_cells, (nx, ny))
+                end
+            end
+        end
+    elseif agent.sensor.pattern == :row_only || agent.sensor.range == 0.0
         # Row-only visibility: agent can only see cells in its current row
         for nx in 1:env.width
             push!(fov_cells, (nx, y))

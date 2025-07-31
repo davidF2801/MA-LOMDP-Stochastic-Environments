@@ -1,11 +1,11 @@
 #!/usr/bin/env julia
 
 """
-Test script for RSP (Random Spread Process) with 3x2 grid and row-only visibility
-Demonstrates exact world enumeration for macro-script evaluation
+Test script for RSP (Random Spread Process) with 5x5 grid and cross-shaped sensor
+Demonstrates complex trajectory with cross-shaped sensor range
 """
 
-println("🚀 RSP 3x2 Row Visibility Test starting...")
+println("🚀 RSP 5x5 Complex Trajectory Test starting...")
 
 using POMDPs
 using POMDPTools
@@ -13,6 +13,8 @@ using Random
 using LinearAlgebra
 using Plots
 using Dates  # Add this for timestamping
+using DataFrames  # For saving metrics to CSV
+using CSV  # For saving metrics to CSV
 Plots.plotlyjs()
 using Infiltrator
 
@@ -24,65 +26,34 @@ using Infiltrator
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 100            # Total simulation steps
-const PLANNING_MODE = :policy         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based, :pbvi)
-#const modes = [:sweep, :macro_approx_099, :macro_approx_097, :macro_approx_095]
+const NUM_STEPS = 20             # Total simulation steps
+const PLANNING_MODE = :sweep         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based)
 const modes = [:pbvi]
 const N_RUNS = 1
 const MAX_BATTERY = 10000.0
 const CHARGING_RATE = 3.0
 const OBSERVATION_COST = 0.0
-# Planning modes:
-#   :script - Exact belief evolution with macro-script planning
-#   :policy - Policy tree planning
-#   :random - Random action selection (baseline for comparison)
-#   :sweep - Systematic sweep over columns in each row
-#   :greedy - Greedy selection maximizing entropy * event_probability
-#   :future_actions - Exact planning considering other agents' possible future actions
-#   :macro_approx - Approximate macro-script planning with branch pruning (uses MAX_PROB_MASS threshold)
-#   :macro_approx_099 - Approximate macro-script planning with 0.99 belief mass threshold
-#   :macro_approx_097 - Approximate macro-script planning with 0.97 belief mass threshold
-#   :macro_approx_095 - Approximate macro-script planning with 0.95 belief mass threshold
-#   :prior_based - Prior-based planning using static probability map (no belief updates)
-#   :pbvi - Point-Based Value Iteration planning
 
 # 🌍 ENVIRONMENT PARAMETERS
-const GRID_WIDTH = 3                  # Grid width (columns)
-const GRID_HEIGHT = 4                 # Grid height (rows)
+const GRID_WIDTH = 5                  # Grid width (columns)
+const GRID_HEIGHT = 5                 # Grid height (rows)
 const INITIAL_EVENTS = 1              # Number of initial events
 const MAX_SENSING_TARGETS = 1         # Maximum cells an agent can sense per step
-const SENSOR_RANGE = 0.0              # Sensor range for agents (0.0 = row-only visibility)
 const DISCOUNT_FACTOR = 0.95        # POMDP discount factor
-const MAX_PROB_MASS = 0.98            # Maximum probability mass to keep when pruning belief branches (for macro_approx)
+const MAX_PROB_MASS = 0.6            # Maximum probability mass to keep when pruning belief branches (for macro_approx)
 
 # 🤖 AGENT PARAMETERS
-const NUM_AGENTS = 2                  # Number of agents (one per row)
-const PLANNING_HORIZON = 4            # Planning horizon for macro-scripts
-const SENSOR_FOV = pi/2               # Field of view angle (radians)
+const NUM_AGENTS = 2                  # Number of agents (two agents with complex trajectories)
+const PLANNING_HORIZON = 10           # Planning horizon for macro-scripts (matches trajectory period)
 const SENSOR_NOISE = 0.0              # Perfect observations
 
 # 📡 COMMUNICATION PARAMETERS
-const CONTACT_HORIZON = 4             # Steps until next sync opportunity
-const GROUND_STATION_X = 2            # Ground station X position
-const GROUND_STATION_Y = 1            # Ground station Y position
+const CONTACT_HORIZON = 10             # Steps until next sync opportunity
+const GROUND_STATION_X = 2            # Ground station X position (center)
+const GROUND_STATION_Y = 1            # Ground station Y position (center)
 
 # =============================================================================
 # HETEROGENEOUS RSP (Random Spread Process) MODEL PARAMETERS
-# -----------------------------------------------------------------------------
-# The environment now uses heterogeneous cell types with different parameters
-# randomly distributed across the grid. Cell types are defined in Types.jl:
-#
-#   HETEROGENEOUS_CELL_TYPES:
-#   - Immune cells: λ=0.0002, β₀=0.0002, α=0.03, δ=0.05 (events rarely start/die quickly)
-#   - Fleeting events: λ=0.0050, β₀=0.0150, α=0.01, δ=0.99 (ignite occasionally, burn out fast)
-#   - Long-lasting events: λ=0.0020, β₀=0.0020, α=0.01, δ=0.95 (rare ignition, ~10-step lifetime)
-#   - Moderate cells: λ=0.0100, β₀=0.0100, α=0.01, δ=0.99 (balanced ignition and lifetime)
-#   - High-contagion cells: λ=0.0200, β₀=0.0100, α=0.1, δ=0.9 (ignite easily and spread)
-#
-# Each cell gets randomly assigned one of these types, creating a realistic
-# non-uniform environment with different event behaviors.
-# =============================================================================
-
 # =============================================================================
 
 # Import the existing environment and planner modules
@@ -91,12 +62,12 @@ using .MyProject
 
 # Import specific types from MyProject
 using .MyProject: Agent, SensingAction, GridObservation, EventState, NO_EVENT, EVENT_PRESENT
-using .MyProject: CircularTrajectory, LinearTrajectory, RangeLimitedSensor
+using .MyProject: ComplexTrajectory, RangeLimitedSensor
 using .MyProject: EventState2, NO_EVENT_2, EVENT_PRESENT_2, EventMap, DynamicsMode, toy_dbn, rsp
 using .MyProject: EventDynamics, SpatialGrid
 
 # Import functions
-using .MyProject.Agents.TrajectoryPlanner: get_position_at_time, execute_plan
+using .MyProject.Agents.TrajectoryPlanner: get_position_at_time, execute_plan, create_complex_trajectory
 
 # Import specific modules
 using .Environment
@@ -105,8 +76,7 @@ using .Environment.EventDynamicsModule
 using .Planners.GroundStation
 using .Planners.MacroPlannerAsync
 using .Planners.PolicyTreePlanner
-using .Planners.MacroPlannerRandom # Added for random planner
-using .Planners.MacroPlannerSweep # Added for sweep planner
+using .Planners.MacroPlannerRandom
 
 # Import RSP functions
 import .Environment.EventDynamicsModule: transition_rsp!
@@ -138,139 +108,27 @@ mutable struct EnhancedEventTracker
     next_event_id::Int
 end
 
-"""
-Save planning time statistics and performance metrics to a file
-"""
-function save_performance_metrics(gs_state, avg_uncertainty, event_observation_percentage, ndd_life, env, agents, results_dir, run_number, planning_mode)
-    # Create the metrics directory path
-    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
-    if !isdir(metrics_dir)
-        mkpath(metrics_dir)
-    end
-    
-    filename = "performance_metrics_$(planning_mode)_run$(run_number).txt"
-    filepath = joinpath(metrics_dir, filename)
-    
-    open(filepath, "w") do file
-        println(file, "="^60)
-        println(file, "PERFORMANCE METRICS REPORT")
-        println(file, "="^60)
-        println(file, "Generated: $(now())")
-        println(file, "Planning Mode: $(planning_mode)")
-        println(file, "Run Number: $(run_number)")
-        println(file, "")
-        
-        # Environment parameters
-        println(file, "ENVIRONMENT PARAMETERS:")
-        println(file, "  Grid size: $(env.width) x $(env.height)")
-        println(file, "  RSP parameters: Heterogeneous (cell-specific)")
-        println(file, "  Cell types: $(length(Types.HETEROGENEOUS_CELL_TYPES)) different types")
-        
-        # Print cell type distribution
-        cell_counts, total_cells = Types.analyze_cell_type_distribution(env.rsp_params)
-        println(file, "  Cell type distribution:")
-        for (cell_name, count) in cell_counts
-            percentage = round(100 * count / total_cells, digits=1)
-            println(file, "    $(cell_name): $(count) ($(percentage)%)")
-        end
-        
-        # Print average parameters
-        avg_lambda = mean(env.rsp_params.lambda_map)
-        avg_alpha = mean(env.rsp_params.alpha_map)
-        avg_delta = mean(env.rsp_params.delta_map)
-        avg_mu = mean(env.rsp_params.mu_map)
-        println(file, "  Average parameters:")
-        println(file, "    λ (lambda): $(round(avg_lambda, digits=4))")
-        println(file, "    α (alpha): $(round(avg_alpha, digits=3))")
-        println(file, "    δ (delta): $(round(avg_delta, digits=3))")
-        println(file, "    μ (mu): $(round(avg_mu, digits=3))")
-        println(file, "")
-        
-        # Agent information
-        println(file, "AGENT INFORMATION:")
-        println(file, "  Number of agents: $(length(agents))")
-        for (i, agent) in enumerate(agents)
-            println(file, "  Agent $(agent.id): trajectory type $(typeof(agent.trajectory)), phase offset $(agent.phase_offset)")
-        end
-        println(file, "")
-        
-        # Planning time statistics
-        println(file, "PLANNING TIME STATISTICS:")
-        if gs_state.num_plans_computed > 0
-            avg_planning_time = get_average_planning_time(gs_state)
-            println(file, "  Total plans computed: $(gs_state.num_plans_computed)")
-            println(file, "  Total planning time: $(round(gs_state.total_planning_time, digits=3)) seconds")
-            println(file, "  Average planning time per plan: $(round(avg_planning_time, digits=3)) seconds")
-            println(file, "")
-            
-            # Per-agent planning times
-            println(file, "  Per-agent planning times:")
-            for (agent_id, times) in gs_state.planning_times
-                if !isempty(times)
-                    agent_avg = sum(times) / length(times)
-                    agent_min = minimum(times)
-                    agent_max = maximum(times)
-                    println(file, "    Agent $(agent_id): $(length(times)) plans")
-                    println(file, "      Average: $(round(agent_avg, digits=3)) seconds")
-                    println(file, "      Min: $(round(agent_min, digits=3)) seconds")
-                    println(file, "      Max: $(round(agent_max, digits=3)) seconds")
-                end
-            end
-        else
-            println(file, "  No planning time data available")
-        end
-        println(file, "")
-        
-        # Performance metrics
-        println(file, "PERFORMANCE METRICS:")
-        println(file, "  Final event observation percentage: $(round(event_observation_percentage, digits=1))%")
-        println(file, "  Final average uncertainty: $(round(avg_uncertainty[end], digits=3))")
-        println(file, "  Normalized Detection Delay (lifetime): $(round(ndd_life, digits=3))")
-        println(file, "  Uncertainty evolution:")
-        for (i, uncertainty) in enumerate(avg_uncertainty)
-            if i % 10 == 1 || i == length(avg_uncertainty)  # Print every 10th step and the last step
-                println(file, "    Step $(i): $(round(uncertainty, digits=3))")
-            end
-        end
-        println(file, "")
-        
-        # Cache statistics (if available)
-        try
-            cache_stats = BeliefManagement.get_cache_stats()
-            println(file, "CACHE STATISTICS:")
-            println(file, "  Hits: $(cache_stats[:hits])")
-            println(file, "  Misses: $(cache_stats[:misses])")
-            println(file, "  Hit rate: $(round(cache_stats[:hit_rate] * 100, digits=1))%")
-            println(file, "  Cache size: $(cache_stats[:cache_size])")
-        catch
-            println(file, "CACHE STATISTICS: Not available")
-        end
-        println(file, "")
-        
-        println(file, "="^60)
-    end
-    
-    println("📁 Performance metrics saved to: $(filepath)")
-    return filepath
-end
-
 println("✅ All modules imported successfully")
 
 # =============================================================================
-# ROW-ONLY VISIBILITY FUNCTIONS
+# CROSS-SHAPED SENSOR FUNCTIONS
 # =============================================================================
 
 """
-Get field of regard for an agent at a specific position (row-only visibility)
+Get field of regard for an agent at a specific position (cross-shaped visibility)
 """
-function get_row_field_of_regard(agent, position, env)
+function get_cross_field_of_regard(agent, position, env)
     x, y = position
     fov_cells = Tuple{Int, Int}[]
     
-    # Row-only visibility: agent can only see cells in its own row
-    for col in 1:env.width
-        if col != x  # Don't include current position
-            push!(fov_cells, (col, y))
+    # Cross-shaped sensor: agent's position and adjacent cells in cardinal directions
+    for dx in -1:1, dy in -1:1
+        nx, ny = x + dx, y + dy
+        if 1 <= nx <= env.width && 1 <= ny <= env.height
+            # Only include cross pattern (not diagonal)
+            if (dx == 0 && dy == 0) || (dx == 0 && dy != 0) || (dx != 0 && dy == 0)
+                push!(fov_cells, (nx, ny))
+            end
         end
     end
     
@@ -288,9 +146,9 @@ function debug_agent_positions(agents)
         println("Agent $(agent.id):")
         println("  Trajectory: $(agent.trajectory)")
         println("  Phase offset: $(agent.phase_offset)")
-        println("  Sensor range: $(agent.sensor.range)")
+        println("  Sensor type: $(typeof(agent.sensor))")
         println("  Positions over time:")
-        for t in 0:10
+        for t in 0:15
             pos = get_position_at_time(agent.trajectory, t, agent.phase_offset)
             println("    Time $(t): $(pos)")
         end
@@ -299,30 +157,43 @@ function debug_agent_positions(agents)
 end
 
 """
-Create agents with row-only visibility (two agents)
+Create agents with complex trajectories and cross-shaped sensors
 """
-function create_row_agents()
+function create_complex_agents()
     agents = Agent[]
     
-    # Create two agents: one in row 1, one in row 3
-    agent_rows = [1, 3]
+    # Agent 1: Complex trajectory starting from second column
+    # Waypoints: (2,1) -> (2,2) -> (2,3) -> (2,4) -> (2,5) -> (4,1) -> (4,2) -> (4,3) -> (4,4) -> (4,5) -> repeat
+    waypoints1 = [
+        (2, 1), (2, 2), (2, 3), (2, 4), (2, 5),  # Second column, going up
+        (4, 1), (4, 2), (4, 3), (4, 4), (4, 5)   # Fourth column, going up
+    ]
+    trajectory1 = create_complex_trajectory(waypoints1, 10)  # Period = 10
     
-    for (i, row) in enumerate(agent_rows)
-        # Create trajectory that cycles through all four rows
-        # For a 4-row grid, we need to cycle through positions (2,1), (2,2), (2,3), (2,4)
-        trajectory = LinearTrajectory(2, 1, 2, 4, 4, 1.0)  # Period = 4, moves from row 1 to row 4
-        phase_offset = (row - 1)  # Start at the correct row
-        # Sensor with row-only visibility
-        sensor = RangeLimitedSensor(SENSOR_RANGE, SENSOR_FOV, SENSOR_NOISE, :row_only)
-        # Agent with phase offset based on starting row and custom battery parameters
-        # Battery parameters: max_battery, charging_rate, observation_cost
-        agent = Agent(i, trajectory, sensor, phase_offset, MAX_BATTERY, CHARGING_RATE, OBSERVATION_COST)
-        push!(agents, agent)
-    end
+    # Agent 2: Complex trajectory starting from first column, different pattern
+    # Waypoints: (1,1) -> (1,2) -> (1,3) -> (1,4) -> (1,5) -> (3,1) -> (3,2) -> (3,3) -> (3,4) -> (3,5) -> repeat
+    waypoints2 = [
+        (2, 1), (2, 2), (2, 3), (2, 4), (2, 5),  # Second column, going up
+        (4, 1), (4, 2), (4, 3), (4, 4), (4, 5)   # Fourth column, going up
+    ]
+    trajectory2 = create_complex_trajectory(waypoints2, 10)  # Period = 10
     
-    println("🤖 Created $(NUM_AGENTS) agents with row-only visibility:")
+    # Cross-shaped sensors for both agents
+    sensor1 = RangeLimitedSensor(0.0, pi/2, SENSOR_NOISE, :cross)
+    sensor2 = RangeLimitedSensor(0.0, pi/2, SENSOR_NOISE, :cross)
+    
+    # Create agents with different phase offsets
+    agent1 = Agent(1, trajectory1, sensor1, 0, MAX_BATTERY, CHARGING_RATE, OBSERVATION_COST)
+    agent2 = Agent(2, trajectory2, sensor2, 3, MAX_BATTERY, CHARGING_RATE, OBSERVATION_COST)  # Phase offset of 5
+    
+    push!(agents, agent1)
+    push!(agents, agent2)
+    
+    println("🤖 Created $(NUM_AGENTS) agents with complex trajectories and cross-shaped sensors:")
     for agent in agents
-        println("  Agent $(agent.id): starts in row $(agent.trajectory.start_y + agent.phase_offset), moves upward 1→2→3→1→2→3..., Phase offset $(agent.phase_offset)")
+        println("  Agent $(agent.id): complex trajectory with period $(agent.trajectory.period), phase offset $(agent.phase_offset)")
+        println("    Sensor: RangeLimitedSensor with :cross pattern (cross-shaped visibility)")
+        println("    Starting position: $(get_position_at_time(agent.trajectory, 0, agent.phase_offset))")
     end
     
     return agents
@@ -331,15 +202,15 @@ end
 """
 Create test environment with heterogeneous RSP dynamics
 """
-function create_rsp_environment(max_prob_mass::Float64=MAX_PROB_MASS)
+function create_rsp_environment()
     # Create event dynamics (not used for RSP, but required by constructor)
     event_dynamics = EventDynamics(0.0, 0.0, 0.0, 0.0, 0.0)
     
     # Create agents
-    agents = create_row_agents()
+    agents = create_complex_agents()
     
     # Create spatial grid environment with RSP dynamics
-    env = SpatialGrid(GRID_WIDTH, GRID_HEIGHT, event_dynamics, agents, SENSOR_RANGE, DISCOUNT_FACTOR, INITIAL_EVENTS, MAX_SENSING_TARGETS, (GROUND_STATION_X, GROUND_STATION_Y), nothing, max_prob_mass)
+    env = SpatialGrid(GRID_WIDTH, GRID_HEIGHT, event_dynamics, agents, 0.0, DISCOUNT_FACTOR, INITIAL_EVENTS, MAX_SENSING_TARGETS, (GROUND_STATION_X, GROUND_STATION_Y), nothing, MAX_PROB_MASS)
     
     # Update to RSP dynamics
     env.dynamics = rsp  # Use RSP dynamics (enum value)
@@ -359,7 +230,6 @@ function create_rsp_environment(max_prob_mass::Float64=MAX_PROB_MASS)
     println("  Max sensing targets: $(MAX_SENSING_TARGETS)")
     println("  Dynamics: Heterogeneous RSP (Random Spread Process)")
     println("  Cell types: $(length(Types.HETEROGENEOUS_CELL_TYPES)) different types randomly distributed")
-    println("  Max probability mass: $(max_prob_mass) (branch pruning threshold)")
     
     # Print cell type distribution
     cell_counts, total_cells = Types.analyze_cell_type_distribution(param_maps)
@@ -447,10 +317,10 @@ function visualize_rsp_state(
 
     # Create a blank plot with correct limits and aspect
     p = plot(; xlim=(0.5, width+0.5), ylim=(0.5, height+0.5),
-        aspect_ratio=:equal, size=(600, 800), legend=false,
+        aspect_ratio=:equal, size=(600, 600), legend=false,
         xlabel="X Coordinate", ylabel="Y Coordinate",
         grid=false,
-        title="RSP $(width)x$(height) Test - Time Step $(time_step) - γ=$(DISCOUNT_FACTOR), Events: $(count(==(EVENT_PRESENT), environment_state)) | Agents: $(length(agents))",
+        title="RSP $(width)x$(height) Complex Trajectories - Time Step $(time_step) - γ=$(DISCOUNT_FACTOR), Events: $(count(==(EVENT_PRESENT), environment_state)) | Agents: $(length(agents))",
         titlefontsize=12,
         background_color=:white
     )
@@ -467,7 +337,7 @@ function visualize_rsp_state(
         color = agent_colors[i]
         pos = get_position_at_time(agent.trajectory, time_step, agent.phase_offset)
         # Get FOR cells
-        for_cells = get_row_field_of_regard(agent, pos, (width=width, height=height))
+        for_cells = get_cross_field_of_regard(agent, pos, (width=width, height=height))
         # Highlight FOR (light color)
         for (x, y) in for_cells
             xs = [x-0.5, x+0.5, x+0.5, x-0.5]
@@ -557,7 +427,7 @@ function create_rsp_animation(
     
     # Create animation
     anim = @animate for frame in frames
-        plot(frame, size=(600, 800))
+        plot(frame, size=(600, 600))
     end
     
     # Save animation with new naming convention
@@ -568,273 +438,9 @@ function create_rsp_animation(
     return anim
 end
 
-"""
-Create uncertainty visualizations including uncertainty map animation and uncertainty over time plot
-"""
-function create_uncertainty_visualizations(
-    uncertainty_evolution::Vector{Matrix{Float64}},
-    average_uncertainty_per_timestep::Vector{Float64},
-    environment_evolution::Vector{Matrix{EventState}},
-    num_steps::Int,
-    results_dir::String="",
-    run_number::Int=1,
-    planning_mode::Symbol=:script
-)
-    println("📊 Creating uncertainty visualizations...")
-    
-    # Create plots directory path
-    plots_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "plots")
-    if !isdir(plots_dir)
-        mkpath(plots_dir)
-    end
-    
-    # 1. Create uncertainty over time plot
-    println("  📈 Creating uncertainty over time plot...")
-    time_points = 1:length(average_uncertainty_per_timestep)
-    
-    uncertainty_plot = plot(
-        time_points, 
-        average_uncertainty_per_timestep, 
-        seriestype=:line,
-        color=:blue,
-        linewidth=2,
-        marker=:circle,
-        markersize=4,
-        title="Average Uncertainty Over Time - Grid $(GRID_WIDTH)x$(GRID_HEIGHT), $(planning_mode), Run $(run_number)",
-        xlabel="Time Step",
-        ylabel="Average Uncertainty (Entropy)",
-        legend=false,
-        grid=true,
-        size=(800, 600)
-    )
-    
-    # Add horizontal line for uniform distribution entropy (log2(2) ≈ 0.693)
-    hline!([1], color=:red, linestyle=:dash, linewidth=1, label="Uniform Distribution")
-    
-    # Save the plot with new naming convention
-    plot_filename = joinpath(plots_dir, "uncertainty_evolution_$(planning_mode)_run$(run_number).png")
-    savefig(uncertainty_plot, plot_filename)
-    println("  ✓ Saved uncertainty plot: $(basename(plot_filename))")
-    
-    # # 2. Create uncertainty map animation
-    # println("  🎬 Creating uncertainty map animation...")
-    
-    # # Find the range of uncertainty values for consistent coloring
-    # all_uncertainties = vcat([vec(u) for u in uncertainty_evolution]...)
-    # min_uncertainty = minimum(all_uncertainties)
-    # max_uncertainty = maximum(all_uncertainties)
-    
-    # # Create frames for uncertainty animation
-    # uncertainty_frames = []
-    
-    # for (step, uncertainty_map) in enumerate(uncertainty_evolution)
-    #     frame = heatmap(
-    #         uncertainty_map,
-    #         colormap=:plasma,
-    #         colorrange=(min_uncertainty, max_uncertainty),
-    #         title="Uncertainty Map (t=$(step)) - Grid $(GRID_WIDTH)x$(GRID_HEIGHT), $(planning_mode), Run $(run_number)",
-    #         xlabel="X",
-    #         ylabel="Y",
-    #         aspect_ratio=:equal,
-    #         size=(600, 400),
-    #         colorbar_title="Uncertainty (Entropy)"
-    #     )
-    #     push!(uncertainty_frames, frame)
-    # end
-    
-    # # Create animation
-    # uncertainty_anim = @animate for frame in uncertainty_frames
-    #     plot(frame)
-    # end
-    
-    # # Save animation with new naming convention
-    # uncertainty_animation_filename = joinpath(plots_dir, "uncertainty_animation_$(planning_mode)_run$(run_number).gif")
-    # gif(uncertainty_anim, uncertainty_animation_filename, fps=1)
-    # println("  ✓ Saved uncertainty animation: $(basename(uncertainty_animation_filename))")
-    
-    println("✅ All uncertainty visualizations created!")
-end
-
 # =============================================================================
 # EVENT TRACKING STRUCTURES
 # =============================================================================
-
-"""
-Event tracking structure to maintain unique event IDs and observation status
-"""
-mutable struct EventTracker
-    cell_active_event_id::Dict{Tuple{Int,Int}, Union{Nothing,Int}}  # Maps cell -> current active event ID
-    event_registry::Dict{Int, Dict}  # Maps event_id -> event info
-    next_event_id::Int  # Next available event ID
-end
-
-"""
-Initialize event tracker
-"""
-function initialize_event_tracker()
-    return EventTracker(
-        Dict{Tuple{Int,Int}, Union{Nothing,Int}}(),
-        Dict{Int, Dict}(),
-        1
-    )
-end
-
-"""
-Update event tracking for a timestep
-"""
-function update_event_tracking!(tracker::EventTracker, prev_environment::Matrix{EventState}, 
-                               curr_environment::Matrix{EventState}, timestep::Int)
-    height, width = size(curr_environment)
-    
-    for y in 1:height, x in 1:width
-        cell = (x, y)
-        prev_state = prev_environment[y, x]
-        curr_state = curr_environment[y, x]
-        
-        if prev_state == NO_EVENT && curr_state == EVENT_PRESENT
-            # New event started
-            event_id = tracker.next_event_id
-            tracker.cell_active_event_id[cell] = event_id
-            tracker.event_registry[event_id] = Dict(
-                :cell => cell,
-                :start_time => timestep,
-                :observed => false,
-                :end_time => nothing
-            )
-            tracker.next_event_id += 1
-            
-        elseif prev_state == EVENT_PRESENT && curr_state == NO_EVENT
-            # Event ended
-            event_id = tracker.cell_active_event_id[cell]
-            if event_id !== nothing
-                tracker.event_registry[event_id][:end_time] = timestep
-                tracker.cell_active_event_id[cell] = nothing
-            end
-        end
-    end
-end
-
-"""
-Mark events as observed based on agent observations
-"""
-function mark_observed_events!(tracker::EventTracker, agent_observations::Vector{Tuple{Int, Vector{Tuple{Tuple{Int,Int}, EventState}}}})
-    for (agent_id, observations) in agent_observations
-        for (cell, observed_state) in observations
-            if observed_state == EVENT_PRESENT
-                event_id = tracker.cell_active_event_id[cell]
-                if event_id !== nothing
-                    tracker.event_registry[event_id][:observed] = true
-                end
-            end
-        end
-    end
-end
-
-"""
-Get event statistics from tracker
-"""
-function get_event_statistics(tracker::EventTracker)
-    total_events = length(tracker.event_registry)
-    observed_events = count(e -> e[:observed], collect(values(tracker.event_registry)))
-    return total_events, observed_events
-end
-
-"""
-Get event statistics from enhanced tracker
-"""
-function get_event_statistics(tracker::EnhancedEventTracker)
-    total_events = length(tracker.event_registry)
-    observed_events = count(e -> e[:observed], collect(values(tracker.event_registry)))
-    return total_events, observed_events
-end
-
-"""
-Calculate Normalized Detection Delay (lifetime-normalized)
-NDD_life = (1/|E_det|) * sum_{e in E_det} (t_detect(e) - t_start(e)) / E[L_e]
-where E[L_e] is the expected duration of event e based on the specific cell where it occurred
-"""
-function calculate_normalized_detection_delay_lifetime(event_tracker::EventTracker, env)
-    detected_events = filter(e -> e[:observed], collect(values(event_tracker.event_registry)))
-    
-    if isempty(detected_events)
-        return 0.0  # No detected events
-    end
-    
-    total_ndd = 0.0
-    
-    for event in detected_events
-        # Calculate detection delay
-        t_start = event[:start_time]
-        t_detect = event[:detection_time]  # We need to track this
-        
-        # Get the cell where this event occurred
-        cell = event[:cell]
-        x, y = cell
-        
-        # Get cell-specific parameters for this event
-        cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
-        
-        # Calculate expected lifetime E[L_e] for RSP events using cell-specific parameters
-        # For RSP, E[L] = 1/μ where μ is the death probability
-        # μ = 1 - δ for the specific cell
-        cell_mu = 1.0 - cell_params.delta
-        expected_lifetime = 1.0 / cell_mu
-        
-        # Calculate normalized delay for this event
-        detection_delay = t_detect - t_start
-        normalized_delay = detection_delay / expected_lifetime
-        
-        total_ndd += normalized_delay
-    end
-    
-    # Average over all detected events
-    ndd_life = total_ndd / length(detected_events)
-    
-    return ndd_life
-end
-
-"""
-Calculate Normalized Detection Delay (lifetime-normalized) for enhanced tracker
-"""
-function calculate_normalized_detection_delay_lifetime(event_tracker::EnhancedEventTracker, env)
-    detected_events = filter(e -> e[:observed], collect(values(event_tracker.event_registry)))
-    
-    if isempty(detected_events)
-        return 0.0  # No detected events
-    end
-    
-    total_ndd = 0.0
-    
-    for event in detected_events
-        # Calculate detection delay
-        t_start = event[:start_time]
-        t_detect = event[:detection_time]  # We need to track this
-        
-        # Get the cell where this event occurred
-        cell = event[:cell]
-        x, y = cell
-        
-        # Get cell-specific parameters for this event
-        cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
-        
-        # Calculate expected lifetime E[L_e] for RSP events using cell-specific parameters
-        # For RSP, E[L] = 1/μ where μ is the death probability
-        # μ = 1 - δ for the specific cell
-        cell_mu = 1.0 - cell_params.delta
-        expected_lifetime = 1.0 / cell_mu
-        
-        # Calculate normalized delay for this event
-        detection_delay = t_detect - t_start
-        normalized_delay = detection_delay / expected_lifetime
-        
-        total_ndd += normalized_delay
-    end
-    
-    # Average over all detected events
-    ndd_life = total_ndd / length(detected_events)
-    
-    return ndd_life
-end
 
 """
 Enhanced event tracking that also tracks detection times
@@ -913,16 +519,296 @@ function mark_observed_events_with_time!(tracker::EnhancedEventTracker, agent_ob
     end
 end
 
+"""
+Get event statistics from enhanced tracker
+"""
+function get_event_statistics(tracker::EnhancedEventTracker)
+    total_events = length(tracker.event_registry)
+    observed_events = count(e -> e[:observed], collect(values(tracker.event_registry)))
+    return total_events, observed_events
+end
+
+"""
+Calculate Normalized Detection Delay (lifetime-normalized) for enhanced tracker
+"""
+function calculate_normalized_detection_delay_lifetime(event_tracker::EnhancedEventTracker, env)
+    detected_events = filter(e -> e[:observed], collect(values(event_tracker.event_registry)))
+    
+    if isempty(detected_events)
+        return 0.0  # No detected events
+    end
+    
+    total_ndd = 0.0
+    
+    for event in detected_events
+        # Calculate detection delay
+        t_start = event[:start_time]
+        t_detect = event[:detection_time]  # We need to track this
+        
+        # Get the cell where this event occurred
+        cell = event[:cell]
+        x, y = cell
+        
+        # Get cell-specific parameters for this event
+        cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
+        
+        # Calculate expected lifetime E[L_e] for RSP events using cell-specific parameters
+        # For RSP, E[L] = 1/μ where μ is the death probability
+        # μ = 1 - δ for the specific cell
+        cell_mu = 1.0 - cell_params.delta
+        expected_lifetime = 1.0 / cell_mu
+        
+        # Calculate normalized delay for this event
+        detection_delay = t_detect - t_start
+        normalized_delay = detection_delay / expected_lifetime
+        
+        total_ndd += normalized_delay
+    end
+    
+    # Average over all detected events
+    ndd_life = total_ndd / length(detected_events)
+    
+    return ndd_life
+end
+
+# =============================================================================
+# METRIC SAVING FUNCTIONS
+# =============================================================================
+
+"""
+Save planning time statistics and performance metrics to a file
+"""
+function save_performance_metrics(gs_state, avg_uncertainty, event_observation_percentage, ndd_life, env, agents, results_dir, run_number, planning_mode)
+    # Create the metrics directory path
+    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
+    if !isdir(metrics_dir)
+        mkpath(metrics_dir)
+    end
+    
+    filename = "performance_metrics_$(planning_mode)_run$(run_number).txt"
+    filepath = joinpath(metrics_dir, filename)
+    
+    open(filepath, "w") do file
+        println(file, "="^60)
+        println(file, "PERFORMANCE METRICS REPORT")
+        println(file, "="^60)
+        println(file, "Generated: $(now())")
+        println(file, "Planning Mode: $(planning_mode)")
+        println(file, "Run Number: $(run_number)")
+        println(file, "")
+        
+        # Environment parameters
+        println(file, "ENVIRONMENT PARAMETERS:")
+        println(file, "  Grid size: $(env.width) x $(env.height)")
+        println(file, "  RSP parameters: Heterogeneous (cell-specific)")
+        println(file, "  Cell types: $(length(Types.HETEROGENEOUS_CELL_TYPES)) different types")
+        
+        # Print cell type distribution
+        cell_counts, total_cells = Types.analyze_cell_type_distribution(env.rsp_params)
+        println(file, "  Cell type distribution:")
+        for (cell_name, count) in cell_counts
+            percentage = round(100 * count / total_cells, digits=1)
+            println(file, "    $(cell_name): $(count) ($(percentage)%)")
+        end
+        
+        # Print average parameters
+        avg_lambda = mean(env.rsp_params.lambda_map)
+        avg_alpha = mean(env.rsp_params.alpha_map)
+        avg_delta = mean(env.rsp_params.delta_map)
+        avg_mu = mean(env.rsp_params.mu_map)
+        println(file, "  Average parameters:")
+        println(file, "    λ (lambda): $(round(avg_lambda, digits=4))")
+        println(file, "    α (alpha): $(round(avg_alpha, digits=3))")
+        println(file, "    δ (delta): $(round(avg_delta, digits=3))")
+        println(file, "    μ (mu): $(round(avg_mu, digits=3))")
+        println(file, "")
+        
+        # Agent information
+        println(file, "AGENT INFORMATION:")
+        println(file, "  Number of agents: $(length(agents))")
+        for (i, agent) in enumerate(agents)
+            println(file, "  Agent $(agent.id): trajectory type $(typeof(agent.trajectory)), phase offset $(agent.phase_offset)")
+        end
+        println(file, "")
+        
+        # Planning time statistics
+        println(file, "PLANNING TIME STATISTICS:")
+        println(file, "  Total plans computed: $(gs_state.num_plans_computed)")
+        println(file, "  Total planning time: $(round(gs_state.total_planning_time, digits=3)) seconds")
+        if gs_state.num_plans_computed > 0
+            avg_planning_time = gs_state.total_planning_time / gs_state.num_plans_computed
+            println(file, "  Average planning time per plan: $(round(avg_planning_time, digits=3)) seconds")
+        end
+        println(file, "")
+        
+        # Per-agent planning times
+        println(file, "  Per-agent planning times:")
+        for (agent_id, times) in gs_state.planning_times
+            if !isempty(times)
+                agent_avg = sum(times) / length(times)
+                agent_min = minimum(times)
+                agent_max = maximum(times)
+                println(file, "    Agent $(agent_id): $(length(times)) plans")
+                println(file, "      Average: $(round(agent_avg, digits=3)) seconds")
+                println(file, "      Min: $(round(agent_min, digits=3)) seconds")
+                println(file, "      Max: $(round(agent_max, digits=3)) seconds")
+            end
+        end
+        println(file, "")
+        
+        # Performance metrics
+        println(file, "PERFORMANCE METRICS:")
+        println(file, "  Final event observation percentage: $(round(event_observation_percentage, digits=1))%")
+        println(file, "  Final average uncertainty: $(round(avg_uncertainty[end], digits=3))")
+        println(file, "  Normalized Detection Delay (lifetime): $(round(ndd_life, digits=3))")
+        println(file, "")
+        
+        # Uncertainty evolution
+        println(file, "  Uncertainty evolution:")
+        for (i, uncertainty) in enumerate(avg_uncertainty)
+            if i % 10 == 1 || i == length(avg_uncertainty)  # Print every 10th step and the last step
+                println(file, "    Step $(i): $(round(uncertainty, digits=3))")
+            end
+        end
+        println(file, "")
+        
+        # Cache statistics (if available)
+        try
+            cache_stats = BeliefManagement.get_cache_stats()
+            println(file, "CACHE STATISTICS:")
+            println(file, "  Hits: $(cache_stats[:hits])")
+            println(file, "  Misses: $(cache_stats[:misses])")
+            println(file, "  Hit rate: $(round(cache_stats[:hit_rate] * 100, digits=1))%")
+            println(file, "  Cache size: $(cache_stats[:cache_size])")
+        catch
+            println(file, "CACHE STATISTICS: Not available")
+        end
+        println(file, "")
+        
+        println(file, "="^60)
+    end
+    
+    println("📁 Performance metrics saved to: $(filepath)")
+    return filepath
+end
+
+"""
+Save detailed event tracking data to CSV
+"""
+function save_event_tracking_data(event_tracker::EnhancedEventTracker, results_dir, run_number, planning_mode)
+    # Create the metrics directory path
+    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
+    if !isdir(metrics_dir)
+        mkpath(metrics_dir)
+    end
+    
+    filename = "event_tracking_$(planning_mode)_run$(run_number).csv"
+    filepath = joinpath(metrics_dir, filename)
+    
+    # Prepare data for CSV
+    rows = []
+    for (event_id, event_info) in event_tracker.event_registry
+        row = Dict(
+            :event_id => event_id,
+            :cell_x => event_info[:cell][1],
+            :cell_y => event_info[:cell][2],
+            :start_time => event_info[:start_time],
+            :end_time => event_info[:end_time] !== nothing ? event_info[:end_time] : -1,
+            :observed => event_info[:observed],
+            :detection_time => event_info[:detection_time] !== nothing ? event_info[:detection_time] : -1,
+            :lifetime => event_info[:end_time] !== nothing ? event_info[:end_time] - event_info[:start_time] : -1,
+            :detection_delay => event_info[:observed] && event_info[:detection_time] !== nothing ? 
+                               event_info[:detection_time] - event_info[:start_time] : -1
+        )
+        push!(rows, row)
+    end
+    
+    # Create DataFrame and save
+    df = DataFrame(rows)
+    CSV.write(filepath, df)
+    
+    println("📁 Event tracking data saved to: $(filepath)")
+    return filepath
+end
+
+"""
+Save uncertainty evolution data to CSV
+"""
+function save_uncertainty_evolution_data(uncertainty_evolution, avg_uncertainty, results_dir, run_number, planning_mode)
+    # Create the metrics directory path
+    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
+    if !isdir(metrics_dir)
+        mkpath(metrics_dir)
+    end
+    
+    filename = "uncertainty_evolution_$(planning_mode)_run$(run_number).csv"
+    filepath = joinpath(metrics_dir, filename)
+    
+    # Prepare data for CSV
+    rows = []
+    for (timestep, avg_unc) in enumerate(avg_uncertainty)
+        row = Dict(
+            :timestep => timestep - 1,  # Convert to 0-based indexing
+            :average_uncertainty => avg_unc
+        )
+        push!(rows, row)
+    end
+    
+    # Create DataFrame and save
+    df = DataFrame(rows)
+    CSV.write(filepath, df)
+    
+    println("📁 Uncertainty evolution data saved to: $(filepath)")
+    return filepath
+end
+
+"""
+Save sync event data to CSV
+"""
+function save_sync_event_data(sync_events, results_dir, run_number, planning_mode)
+    # Create the metrics directory path
+    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
+    if !isdir(metrics_dir)
+        mkpath(metrics_dir)
+    end
+    
+    filename = "sync_events_$(planning_mode)_run$(run_number).csv"
+    filepath = joinpath(metrics_dir, filename)
+    
+    # Prepare data for CSV
+    rows = []
+    for (timestep, agent_id) in sync_events
+        row = Dict(
+            :timestep => timestep,
+            :agent_id => agent_id
+        )
+        push!(rows, row)
+    end
+    
+    # Create DataFrame and save
+    df = DataFrame(rows)
+    CSV.write(filepath, df)
+    
+    println("📁 Sync event data saved to: $(filepath)")
+    return filepath
+end
+
 # =============================================================================
 # RSP SIMULATION FUNCTIONS
 # =============================================================================
 
 """
-Simulate RSP environment evolution
+Simulate environment evolution once and store it for replay
 """
-function simulate_rsp_environment(env, num_steps::Int,  planning_mode::Symbol)
-    println("\n🔥 Simulating RSP Environment Evolution")
-    println("======================================")
+function simulate_environment_once(num_steps::Int)
+    println("\n🔥 Simulating Environment Evolution for Replay")
+    println("=============================================")
+    
+    # Create environment
+    env = create_rsp_environment()
+    
+    # Store initial RNG state - use a fixed seed for reproducibility
+    initial_rng_state = [42]  # Use a simple fixed seed
     
     # Initialize environment state
     current_state = Matrix{EventState}(undef, GRID_HEIGHT, GRID_WIDTH)
@@ -936,12 +822,10 @@ function simulate_rsp_environment(env, num_steps::Int,  planning_mode::Symbol)
     end
     
     # Track evolution
-    evolution = [copy(current_state)]
+    event_evolution = [copy(current_state)]
     
     println("Initial state:")
     display(current_state)
-    println("Ignition probability map:")
-    display(env.ignition_prob)
     
     # Simulate evolution
     for step in 1:num_steps
@@ -951,52 +835,30 @@ function simulate_rsp_environment(env, num_steps::Int,  planning_mode::Symbol)
         transition_rsp!(new_state, current_state, env.rsp_params, Random.GLOBAL_RNG)
         
         current_state = new_state
-        push!(evolution, copy(current_state))
+        push!(event_evolution, copy(current_state))
         
-        println("\nStep $(step):")
-        display(current_state)
-        
-        # Debug: show transition probabilities for a specific cell
-        if step == 1
-            println("\nDebug: Transition probabilities for cell (1,2) - neighbor of initial event:")
-            x, y = 1, 2
-            current_cell_state = current_state[y, x] == NO_EVENT ? 1 : 2
-            
-            # Get neighbor states
-            neighbor_states = Int[]
-            for dx in -1:1, dy in -1:1
-                if dx == 0 && dy == 0
-                    continue
-                end
-                nx, ny = x + dx, y + dy
-                if 1 <= nx <= GRID_WIDTH && 1 <= ny <= GRID_HEIGHT
-                    neighbor_state = current_state[ny, nx] == NO_EVENT ? 1 : 2
-                    push!(neighbor_states, neighbor_state)
-                end
-            end
-            
-            # Get cell-specific parameters
-            cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
-            
-            prob_no_event = get_transition_probability_rsp(1, current_cell_state, neighbor_states;
-                λ=cell_params.lambda,
-                β0=cell_params.beta0,
-                α=cell_params.alpha,
-                δ=cell_params.delta)
-            prob_event = get_transition_probability_rsp(2, current_cell_state, neighbor_states;
-                λ=cell_params.lambda,
-                β0=cell_params.beta0,
-                α=cell_params.alpha,
-                δ=cell_params.delta)
-            println("  Current state: $(current_cell_state == 1 ? "NO_EVENT" : "EVENT_PRESENT")")
-            println("  Active neighbors: $(count(x -> x == 2, neighbor_states))")
-            println("  P(NO_EVENT): $(round(prob_no_event, digits=3))")
-            println("  P(EVENT_PRESENT): $(round(prob_event, digits=3))")
-            println("  Local ignition: $(env.ignition_prob[y, x])")
+        if step % 100 == 0
+            println("Step $(step): $(count(==(EVENT_PRESENT), current_state)) events active")
         end
     end
     
-    return evolution
+    println("✅ Environment evolution simulated and stored for replay")
+    println("  Total steps: $(length(event_evolution))")
+    println("  Final events: $(count(==(EVENT_PRESENT), event_evolution[end]))")
+    
+    return ReplayEnvironment(env, event_evolution, initial_rng_state)
+end
+
+"""
+Get environment state at a specific timestep from replay
+"""
+function get_replay_state(replay_env::ReplayEnvironment, timestep::Int)
+    if timestep < length(replay_env.event_evolution)
+        return replay_env.event_evolution[timestep + 1]  # +1 because evolution starts at t=0
+    else
+        # If beyond stored evolution, return last state
+        return replay_env.event_evolution[end]
+    end
 end
 
 """
@@ -1006,7 +868,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     println("🚀 Starting RSP Asynchronous Centralized Planning Simulation (Replay)")
     println("====================================================================")
     println("Grid: $(GRID_WIDTH)x$(GRID_HEIGHT)")
-    println("Agents: $(NUM_AGENTS) (rows 1 and 3)")
+    println("Agents: $(NUM_AGENTS) (complex trajectories)")
     println("Planning mode: $(planning_mode)")
     println("Dynamics: RSP (Replay)")
     println("Run: $(run_number)")
@@ -1067,11 +929,10 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
             plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
             action = execute_plan(agent, plan, plan_type, agent.observation_history)
             push!(joint_actions, action)
-            
             # Ensure every agent charges every timestep (this is the key fix!)
             # The charging rate is applied every timestep regardless of action execution
             agent.battery_level = min(agent.max_battery, agent.battery_level + agent.charging_rate)
-            # Use POMDP interface to get observations
+            
             if !isempty(action.target_cells)
                 # Get observation using POMDP observation model
                 # For replay, we need to get the actual state from replay
@@ -1110,7 +971,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
         push!(environment_evolution, copy(current_environment))
         push!(action_history, joint_actions)
         
-        # Update global belief with new observations using t_clean log2ic
+        # Update global belief with new observations using t_clean logic
         if gs_state.global_belief !== nothing
             # Determine t_clean (last time where all observation outcomes are known)
             tau = gs_state.agent_last_sync
@@ -1200,91 +1061,6 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
 end
 
 # =============================================================================
-# REPLAY SYSTEM FOR FAIR COMPARISON
-# =============================================================================
-
-"""
-Simulate environment evolution once and store it for replay
-"""
-function simulate_environment_once(num_steps::Int)
-    println("\n🔥 Simulating Environment Evolution for Replay")
-    println("=============================================")
-    
-    # Create environment
-    env = create_rsp_environment()
-    
-    # Store initial RNG state - use a fixed seed for reproducibility
-    initial_rng_state = [42]  # Use a simple fixed seed
-    
-    # Initialize environment state
-    current_state = Matrix{EventState}(undef, GRID_HEIGHT, GRID_WIDTH)
-    current_state .= NO_EVENT
-    
-    # Add initial events
-    for _ in 1:INITIAL_EVENTS
-        x = rand(1:GRID_WIDTH)
-        y = rand(1:GRID_HEIGHT)
-        current_state[y, x] = EVENT_PRESENT
-    end
-    
-    # Track evolution
-    event_evolution = [copy(current_state)]
-    
-    println("Initial state:")
-    display(current_state)
-    
-    # Simulate evolution
-    for step in 1:num_steps
-        new_state = similar(current_state)
-        
-        # Use heterogeneous RSP transition with parameter maps
-        transition_rsp!(new_state, current_state, env.rsp_params, Random.GLOBAL_RNG)
-        
-        current_state = new_state
-        push!(event_evolution, copy(current_state))
-        
-        if step % 100 == 0
-            println("Step $(step): $(count(==(EVENT_PRESENT), current_state)) events active")
-        end
-    end
-    
-    println("✅ Environment evolution simulated and stored for replay")
-    println("  Total steps: $(length(event_evolution))")
-    println("  Final events: $(count(==(EVENT_PRESENT), event_evolution[end]))")
-    
-    return ReplayEnvironment(env, event_evolution, initial_rng_state)
-end
-
-"""
-Get environment state at a specific timestep from replay
-"""
-function get_replay_state(replay_env::ReplayEnvironment, timestep::Int)
-    if timestep < length(replay_env.event_evolution)
-        return replay_env.event_evolution[timestep + 1]  # +1 because evolution starts at t=0
-    else
-        # If beyond stored evolution, return last state
-        return replay_env.event_evolution[end]
-    end
-end
-
-"""
-Simulate RSP environment evolution using replay
-"""
-function simulate_rsp_environment_replay(replay_env::ReplayEnvironment, num_steps::Int, planning_mode::Symbol)
-    println("\n🔥 Replaying RSP Environment Evolution")
-    println("======================================")
-    
-    # Restore RNG state for reproducibility
-    Random.seed!(replay_env.rng_state[1])
-    
-    println("Initial state (from replay):")
-    display(replay_env.event_evolution[1])
-    
-    # Return the stored evolution (truncated to requested steps)
-    return replay_env.event_evolution[1:min(num_steps+1, length(replay_env.event_evolution))]
-end
-
-# =============================================================================
 # MAIN EXECUTION
 # =============================================================================
 
@@ -1298,47 +1074,21 @@ end
 
 println("📁 Results will be saved in: $(results_base_dir)")
 
-
 for n in 1:N_RUNS
     # Simulate environment once for fair comparison
     println("\n🔥 Simulating environment once for replay system...")
     replay_env = simulate_environment_once(NUM_STEPS)
     for mode in modes
         PLANNING_MODE = mode
-        
-        # Determine the actual planning mode and max_prob_mass based on the mode
-        actual_planning_mode = mode
-        max_prob_mass = MAX_PROB_MASS
-        
-        # Parse probability mass from symbol name if it's a macro_approx variant
-        mode_str = string(mode)
-        if startswith(mode_str, "macro_approx_")
-            actual_planning_mode = :macro_approx
-            # Extract everything after "macro_approx_" and convert to probability mass
-            prob_mass_str = mode_str[length("macro_approx_")+1:end]
-            # Handle decimal values by parsing as Float64 directly
-            # If the string represents a decimal (e.g., "09999999" should be 0.9999999)
-            # we need to insert a decimal point after the first digit
-            if length(prob_mass_str) > 1
-                # Insert decimal point after first digit: "09999999" -> "0.9999999"
-                prob_mass_str = prob_mass_str[1] * "." * prob_mass_str[2:end]
-            end
-            max_prob_mass = parse(Float64, prob_mass_str)
-        end
-        @infiltrate
-        
-        println("🎯 RSP 3x2 Row Visibility Test")
-        println("==============================")
+        println("🎯 RSP 5x5 Complex Trajectory Test")
+        println("==================================")
         println("Configuration:")
         println("  Grid: $(GRID_WIDTH)x$(GRID_HEIGHT)")
-        println("  Agents: $(NUM_AGENTS) (rows 1 and 3)")
+        println("  Agents: $(NUM_AGENTS) (complex trajectories)")
         println("  Planning horizon: $(PLANNING_HORIZON)")
-        println("  Planning mode: $(actual_planning_mode) (:script, :policy, :random, :sweep, :greedy, :future_actions, :macro_approx, :pbvi)")
-        if actual_planning_mode == :macro_approx
-            println("  Max probability mass: $(max_prob_mass) (branch pruning threshold)")
-        end
+        println("  Planning mode: $(PLANNING_MODE)")
         println("  Dynamics: Heterogeneous RSP (Replay)")
-        println("  Row-only visibility: true")
+        println("  Cross-shaped sensor: true")
         println("  Run: $(n)/$(N_RUNS)")
 
         # Debug: show agent positions and trajectories
@@ -1347,20 +1097,8 @@ for n in 1:N_RUNS
         # Create environment distribution visualization
         create_environment_distribution_plot(replay_env.env.rsp_params, results_base_dir, n)
 
-        # Create a new environment with the appropriate max_prob_mass for this mode
-        # We need to update the replay environment's env with the correct max_prob_mass
-        if actual_planning_mode == :macro_approx
-            # Create new environment with correct max_prob_mass
-            new_env = create_rsp_environment(max_prob_mass)
-            # Copy the RSP parameters from the original environment
-            new_env.rsp_params = replay_env.env.rsp_params
-            new_env.ignition_prob = replay_env.env.ignition_prob
-            # Update the replay environment
-            replay_env.env = new_env
-        end
-
         # Run the simulation with replay
-        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, avg_uncertainty, ndd_life = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, actual_planning_mode)
+        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, avg_uncertainty, ndd_life = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, mode)
 
         println("\n✅ RSP test completed!")
         println("📊 Final event observation percentage: $(round(percentage, digits=1))%")
@@ -1388,27 +1126,36 @@ for n in 1:N_RUNS
         end
         println("="^60) 
 
+        # Save performance metrics
+        println("\n📊 Saving Performance Metrics...")
+        println("===============================")
+        
+        # Save main performance metrics
+        save_performance_metrics(gs_state, avg_uncertainty, percentage, ndd_life, replay_env.env, agents, results_base_dir, n, PLANNING_MODE)
+        
+        # Save detailed event tracking data
+        save_event_tracking_data(event_tracker, results_base_dir, n, PLANNING_MODE)
+        
+        # Save uncertainty evolution data
+        save_uncertainty_evolution_data(uncertainty_evolution, avg_uncertainty, results_base_dir, n, PLANNING_MODE)
+        
+        # Save sync event data
+        save_sync_event_data(sync_events, results_base_dir, n, PLANNING_MODE)
+        
         # Create visualizations
         println("\n🎨 Creating Visualizations...")
         println("============================")
         
         # Create simulation animation
-        anim = create_rsp_animation(agents, NUM_STEPS, env_evolution, action_history, (GROUND_STATION_X, GROUND_STATION_Y), results_base_dir, n, mode)
-        
-        # Create uncertainty visualization
-        println("\n📊 Creating Uncertainty Visualizations...")
-        create_uncertainty_visualizations(uncertainty_evolution, avg_uncertainty, env_evolution, NUM_STEPS, results_base_dir, n, mode)
-        
-        # Save performance metrics
-        save_performance_metrics(gs_state, avg_uncertainty, percentage, ndd_life, replay_env.env, agents, results_base_dir, n, mode)
+        anim = create_rsp_animation(agents, NUM_STEPS, env_evolution, action_history, (GROUND_STATION_X, GROUND_STATION_Y), results_base_dir, n, PLANNING_MODE)
         
         println("\n✅ RSP simulation completed!")
         println("📁 Check the results folder for:")
-        println("  - Run $(n)/$(mode)/animations/ (main simulation animation)")
-        println("  - Run $(n)/$(mode)/plots/ (uncertainty visualizations)")
-        println("  - Run $(n)/$(mode)/metrics/ (performance metrics)")
+        println("  - Run $(n)/$(PLANNING_MODE)/animations/ (main simulation animation)")
+        println("  - Run $(n)/$(PLANNING_MODE)/metrics/ (performance metrics and data)")
+        println("  - Run $(n)/environment/ (environment parameter distribution)")
     end
 end
 
 println("\n🎉 All simulations completed!")
-println("📁 Final results saved in: $(results_base_dir)")
+println("📁 Final results saved in: $(results_base_dir)") 

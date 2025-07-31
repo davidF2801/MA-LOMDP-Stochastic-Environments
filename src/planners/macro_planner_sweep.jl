@@ -10,7 +10,7 @@ import ..Agents.BeliefManagement: sample_from_belief
 # Import types from the parent module (Planners)
 import ..EventState, ..NO_EVENT, ..EVENT_PRESENT
 import ..EventState2, ..NO_EVENT_2, ..EVENT_PRESENT_2
-import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..RangeLimitedSensor, ..EventMap
+import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..ComplexTrajectory, ..RangeLimitedSensor, ..EventMap
 # Import trajectory functions
 import ..Agents.TrajectoryPlanner.get_position_at_time
 # Import belief management functions
@@ -222,8 +222,20 @@ function get_field_of_regard_at_position(agent, position, env)
     x, y = position
     fov_cells = Tuple{Int, Int}[]
     
-    # Check if we want row-only visibility (sensor range = 0 means row-only)
-    if agent.sensor.range == 0.0
+    # Check sensor pattern
+    if agent.sensor.pattern == :cross
+        # Cross-shaped sensor: agent's position and adjacent cells
+        ax, ay = position
+        for dx in -1:1, dy in -1:1
+            nx, ny = ax + dx, ay + dy
+            if 1 <= nx <= env.width && 1 <= ny <= env.height
+                # Only include cross pattern (not diagonal)
+                if (dx == 0 && dy == 0) || (dx == 0 && dy != 0) || (dx != 0 && dy == 0)
+                    push!(fov_cells, (nx, ny))
+                end
+            end
+        end
+    elseif agent.sensor.pattern == :row_only || agent.sensor.range == 0.0
         # Row-only visibility: agent can only see cells in its current row
         for nx in 1:env.width
             push!(fov_cells, (nx, y))

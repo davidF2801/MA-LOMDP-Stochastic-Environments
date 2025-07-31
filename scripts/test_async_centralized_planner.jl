@@ -497,7 +497,7 @@ function create_test_environment()
     agents = create_test_agents()
     
     # Create spatial grid environment, now with ground_station_pos
-    env = SpatialGrid(GRID_WIDTH, GRID_HEIGHT, event_dynamics, agents, SENSOR_RANGE, DISCOUNT_FACTOR, INITIAL_EVENTS, MAX_SENSING_TARGETS, (GROUND_STATION_X, GROUND_STATION_Y))
+    env = SpatialGrid(GRID_WIDTH, GRID_HEIGHT, event_dynamics, agents, SENSOR_RANGE, DISCOUNT_FACTOR, INITIAL_EVENTS, MAX_SENSING_TARGETS, (GROUND_STATION_X, GROUND_STATION_Y), nothing, 0.95)
     
     println("🌍 Created test environment:")
     println("  Grid: $(GRID_WIDTH)x$(GRID_HEIGHT)")

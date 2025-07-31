@@ -1,3 +1,4 @@
+
 module MacroPlannerAsyncApprox
 
 using POMDPs
@@ -11,7 +12,7 @@ import ..Agents.BeliefManagement: sample_from_belief
 # Import types from the parent module (Planners)
 import ..EventState, ..NO_EVENT, ..EVENT_PRESENT
 import ..EventState2, ..NO_EVENT_2, ..EVENT_PRESENT_2
-import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..RangeLimitedSensor, ..EventMap
+import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..ComplexTrajectory, ..RangeLimitedSensor, ..EventMap
 # Import trajectory functions
 import ..Agents.TrajectoryPlanner.get_position_at_time
 # Import DBN functions for transition modeling
@@ -59,7 +60,6 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     # Step 1 & 2: Pre-compute belief branches up to t_clean (independent of action sequences)
     println("🔄 Pre-computing belief branches for agent $(agent.id)...")
     B_branches = precompute_belief_branches(env, agent, gs_state)
-    @infiltrate
     best_sequence = SensingAction[]  # Default to empty sequence
     best_value = -Inf
     println("🔍 Evaluating $(length(action_sequences)) action sequences for agent $(agent.id)")
@@ -106,6 +106,8 @@ function generate_action_sequences(agent, env, C::Int, phase_offset::Int=0)
     
     # 2. Get available actions for each timestep
     actions_per_timestep = Vector{Vector{SensingAction}}()
+    theoretical_total = 1  # Start with 1 for multiplication
+    
     for t in 1:C
         pos = trajectory_positions[t]
         for_cells = get_field_of_regard_at_position(agent, pos, env)
@@ -130,10 +132,31 @@ function generate_action_sequences(agent, env, C::Int, phase_offset::Int=0)
         end
         
         push!(actions_per_timestep, timestep_actions)
+        theoretical_total *= length(timestep_actions)
     end
     
-    # 3. Generate all sequences by selecting one action per timestep
-    sequences = generate_sequences_from_actions_per_timestep(actions_per_timestep)
+    # 3. Calculate theoretical total and decide whether to sample
+    println("📊 Action sequence analysis for agent $(agent.id):")
+    println("  Horizon C: $(C)")
+    println("  Theoretical total sequences: $(theoretical_total)")
+    if theoretical_total > 256
+        println("  ⚠️  Total exceeds 1024, sampling 1024 sequences")
+        # Generate all sequences first
+        all_sequences = generate_sequences_from_actions_per_timestep(actions_per_timestep)
+        
+        # Sample 1024 sequences randomly
+        if length(all_sequences) > 256
+            sampled_indices = randperm(length(all_sequences))[1:256]
+            sequences = all_sequences[sampled_indices]
+            println("  ✅ Sampled $(length(sequences)) sequences from $(length(all_sequences)) total")
+        else
+            sequences = all_sequences
+            println("  ✅ Using all $(length(sequences)) sequences (≤ 1024)")
+        end
+    else
+        println("  ✅ Using all $(theoretical_total) sequences (≤ 1024)")
+        sequences = generate_sequences_from_actions_per_timestep(actions_per_timestep)
+    end
     
     return sequences
 end
@@ -193,27 +216,39 @@ function get_field_of_regard_at_position(agent, position, env)
     x, y = position
     fov_cells = Tuple{Int, Int}[]
     
-    # Check if we want row-only visibility (sensor range = 0 means row-only)
-    if agent.sensor.range == 0.0
+    # Check sensor pattern
+    if agent.sensor.pattern == :cross
+        # Cross-shaped sensor: agent's position and adjacent cells
+        ax, ay = position
+        for dx in -1:1, dy in -1:1
+            nx, ny = ax + dx, ay + dy
+            if 1 <= nx <= env.width && 1 <= ny <= env.height
+                # Only include cross pattern (not diagonal)
+                if (dx == 0 && dy == 0) || (dx == 0 && dy != 0) || (dx != 0 && dy == 0)
+                    push!(fov_cells, (nx, ny))
+                end
+            end
+        end
+    elseif agent.sensor.pattern == :row_only || agent.sensor.range == 0.0
         # Row-only visibility: agent can only see cells in its current row
         for nx in 1:env.width
             push!(fov_cells, (nx, y))
         end
     else
         # Standard sensor range visibility
-    sensor_range = round(Int, agent.sensor.range)
-    for dx in -sensor_range:sensor_range
-        for dy in -sensor_range:sensor_range
-            nx, ny = x + dx, y + dy
-            if 1 <= nx <= env.width && 1 <= ny <= env.height
-                # Check if within sensor range
-                distance = sqrt(dx^2 + dy^2)
-                if distance <= agent.sensor.range
-                    push!(fov_cells, (nx, ny))
+        sensor_range = round(Int, agent.sensor.range)
+        for dx in -sensor_range:sensor_range
+            for dy in -sensor_range:sensor_range
+                nx, ny = x + dx, y + dy
+                if 1 <= nx <= env.width && 1 <= ny <= env.height
+                    # Check if within sensor range
+                    distance = sqrt(dx^2 + dy^2)
+                    if distance <= agent.sensor.range
+                        push!(fov_cells, (nx, ny))
+                    end
                 end
             end
         end
-    end
     end
     return fov_cells
 end
@@ -254,16 +289,22 @@ function precompute_belief_branches(env, agent, gs_state)
     # Start with uniform belief distribution (we knew nothing at t=0)
     B = initialize_uniform_belief(env)
     for t in 0:(t_clean-1)
-        B = evolve_no_obs(B, env)  # Contagion-aware update
         # Apply known observations (perfect observations)
         for (agent_j, action_j) in get_known_observations_at_time(t, gs_state)
             for cell in action_j.target_cells
                 if has_known_observation(t, cell, gs_state)
                     observed_value = get_known_observation(t, cell, gs_state)
+                    if t_clean >10
+                        @infiltrate
+                    end
                     B = collapse_belief_to(B, cell, observed_value)
                 end
             end
         end
+        if t_clean >10
+            @infiltrate
+        end
+        B = evolve_no_obs(B, env)  # Contagion-aware update
     end
 
     # Step 3: Initialize branching structure at t_clean
@@ -312,7 +353,7 @@ function precompute_belief_branches(env, agent, gs_state)
             new_branches = Vector{Tuple{Belief, Float64}}()
             for (B_cur, p_branch) in B_branches[t]
 
-                B_evolved = evolve_no_obs(B_cur, env)
+                B_evolved = deepcopy(B_cur)
                 
                 # Check which observations need branching based on the current window
                 obs_set = Vector{Tuple{Int, SensingAction}}()  # Unknown observations for branching
@@ -353,14 +394,17 @@ function precompute_belief_branches(env, agent, gs_state)
                         for (cell, observed_state) in observation_combo
                             B_new = collapse_belief_to(B_new, cell, observed_state)
                         end
+                        B_new = evolve_no_obs(B_new, env)
                         push!(new_branches, (B_new, p_branch * probability))
-
                     end
                 else
+                    B_new = evolve_no_obs(B_new, env)
                     push!(new_branches, (B_evolved, p_branch))
                 end
+                
             end
-            new_branches = branch_pruning(new_branches, env, agent, gs_state)
+            
+            #new_branches = branch_pruning(new_branches, env, agent, gs_state)
             B_branches[t + 1] = merge_equivalent_beliefs(new_branches)
         end
     end
@@ -428,9 +472,9 @@ function branch_pruning(branches::Vector{Tuple{Belief, Float64}}, env, agent, gs
         if actual_discarded > max_discard_prob + 1e-10  # Allow small numerical errors
             @warn "Discarded more than allowed: $(actual_discarded) > $(max_discard_prob)"
         end
-        if length(normalized_branches) < length(branches) && length(normalized_branches) > 3
-            @infiltrate
-        end
+        # if length(normalized_branches) < length(branches) && length(normalized_branches) > 3
+        #     @infiltrate
+        # end
         return normalized_branches
     else
         # Fallback: keep original branches if no probability mass
@@ -504,24 +548,22 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                     end
                     B_next = evolve_no_obs(B_new, env)
                     push!(new_branches, (B_next, p_branch * probability))
-                    if sum(p_branch for (_, p_branch) in new_branches)>1.1
-                        @infiltrate
-                    end
                 end
             else
                 # All actions are wait actions - just evolve belief without observations
                 B_next = evolve_no_obs(B, env)
                 push!(new_branches, (B_next, p_branch))
-                            end
             end
-            new_branches = branch_pruning(new_branches, env, agent, gs_state)
-            B_post[t_global + 1] = merge_equivalent_beliefs(new_branches)
-        
-        # Check that probability branches sum to 1.0
-        total_prob = sum(p_branch for (_, p_branch) in B_post[t_global + 1])        
-        if abs(total_prob-1.0) > 1e-6
-            @warn "Probability branches don't sum to 1.0: $(total_prob)"
         end
+            prior_branches = deepcopy(new_branches)
+            new_branches = branch_pruning(prior_branches, env, agent, gs_state)
+            # The error is due to incorrect placement of parentheses and a typo in 'length'.
+            # The generator expression for 'all' must be parenthesized, and 'length' is misspelled as 'lenth'.
+            # The correct form is:
+            # if all(action.target_cells != Tuple{Int,Int}[] for action in seq) && length(prior_branches) < length(new_branches)
+            #     @infiltrate
+            # end
+            B_post[t_global + 1] = merge_equivalent_beliefs(new_branches)
         # Step 6.2: Compute expected reward at time t_global
         R_seq[k] = compute_expected_reward(B_post[t_global], a_i, c_obs)
     end
@@ -569,7 +611,7 @@ function compute_expected_reward(belief_branches, action, c_obs)
             H_before = calculate_cell_entropy(B_cur, cell)
             H_after = 0.0
             info_gain = H_before - H_after
-            weighted_gain = info_gain*get_event_probability(B_cur, cell)
+            weighted_gain = info_gain
 
             expected_reward += p_branch * weighted_gain
         end

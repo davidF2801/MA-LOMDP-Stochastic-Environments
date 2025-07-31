@@ -64,12 +64,13 @@ struct GridObservation
 end
 
 """
-RangeLimitedSensor - Model of a range-limited sensor
+RangeLimitedSensor - Model of a range-limited sensor with different patterns
 """
 struct RangeLimitedSensor
     range::Float64           # Sensing range
     field_of_view::Float64   # Field of view angle (radians)
     noise_level::Float64     # Observation noise
+    pattern::Symbol          # Pattern type: :circular, :row_only, :cross
 end
 
 """
@@ -97,6 +98,16 @@ struct LinearTrajectory <: Trajectory
     end_x::Int
     end_y::Int
     period::Int
+    step_size::Float64
+end
+
+"""
+ComplexTrajectory - Complex periodic trajectory with multiple waypoints
+Implements the pattern: starts at second column, goes up, then to fourth column, goes up, then repeats
+"""
+struct ComplexTrajectory <: Trajectory
+    waypoints::Vector{Tuple{Int, Int}}  # Sequence of waypoints to visit
+    period::Int                         # Total period of the trajectory
     step_size::Float64
 end
 
@@ -218,16 +229,33 @@ mutable struct Agent
     belief::Any                       # Local belief state (Belief type from BeliefManagement)
     observation_history::Vector{GridObservation}  # History of observations
     plan_index::Int                   # Index of next action to execute in current plan
+    battery_level::Float64            # Current battery level
+    max_battery::Float64              # Maximum battery capacity
+    charging_rate::Float64            # Battery charging rate per timestep
+    observation_cost::Float64         # Battery cost per observation
+    reactive_policy::Any              # Reactive policy function (for policy tree planner)
 end
 
 # Constructor with default observation history and plan index
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, belief::Any)
-    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1)
+    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing)
 end
 
 # Constructor with default belief, observation history, and plan index
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int)
-    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1)
+    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing)
+end
+
+# Constructor with custom battery parameters
+function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, 
+               max_battery::Float64, charging_rate::Float64, observation_cost::Float64)
+    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing)
+end
+
+# Constructor with all parameters
+function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, belief::Any,
+               max_battery::Float64, charging_rate::Float64, observation_cost::Float64)
+    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing)
 end
 
 # Export all types
@@ -235,7 +263,7 @@ export EventState, NO_EVENT, EVENT_PRESENT, EVENT_SPREADING, EVENT_DECAYING
 export EventState2, NO_EVENT_2, EVENT_PRESENT_2
 export EventState4, NO_EVENT_4, EVENT_PRESENT_4, EVENT_SPREADING_4, EVENT_DECAYING_4
 export SensingAction, GridObservation, RangeLimitedSensor
-export Trajectory, CircularTrajectory, LinearTrajectory
+export Trajectory, CircularTrajectory, LinearTrajectory, ComplexTrajectory
 export EventDynamics, TwoStateEventDynamics
 export DeterministicDistribution, Deterministic
 export Belief
@@ -243,6 +271,62 @@ export Agent
 
 # Export helper functions
 export get_event_probability, set_event_probability!, get_event_probability_vector, set_event_probability_vector!, normalize_cell_distribution!
+
+# Battery management functions
+"""
+update_battery!(agent::Agent, num_observations::Int=0)
+Update agent's battery level: charge by charging_rate, discharge by observation_cost * num_observations
+"""
+function update_battery!(agent::Agent, num_observations::Int=0)
+    # Charge the battery
+    agent.battery_level = min(agent.max_battery, agent.battery_level + agent.charging_rate)
+    
+    # Discharge for observations
+    total_cost = agent.observation_cost * num_observations
+    agent.battery_level = max(0.0, agent.battery_level - total_cost)
+end
+
+"""
+can_observe(agent::Agent, num_observations::Int=1)
+Check if agent has enough battery to make observations
+"""
+function can_observe(agent::Agent, num_observations::Int=1)
+    required_energy = agent.observation_cost * num_observations
+    return agent.battery_level >= required_energy
+end
+
+"""
+get_battery_percentage(agent::Agent)
+Get battery level as a percentage
+"""
+function get_battery_percentage(agent::Agent)
+    return (agent.battery_level / agent.max_battery) * 100.0
+end
+
+"""
+simulate_battery_evolution(agent::Agent, action::SensingAction, current_battery::Float64)
+Simulate battery evolution for one timestep: charge by charging_rate, discharge by observation_cost * num_observations
+Returns the new battery level
+"""
+function simulate_battery_evolution(agent::Agent, action::SensingAction, current_battery::Float64)
+    # Charge the battery
+    new_battery = min(agent.max_battery, current_battery + agent.charging_rate)
+    
+    # Discharge for observations
+    num_observations = length(action.target_cells)
+    total_cost = agent.observation_cost * num_observations
+    new_battery = max(0.0, new_battery - total_cost+agent.charging_rate)
+    new_battery = min(agent.max_battery, new_battery)
+    return new_battery
+end
+
+"""
+check_battery_feasible(agent::Agent, action::SensingAction, current_battery::Float64)
+Check if an action is feasible given current battery level
+"""
+function check_battery_feasible(agent::Agent, action::SensingAction, current_battery::Float64)
+    return current_battery >= 0.0
+end
 
 # Add RSP-related types
 const EventMap = Matrix{EventState}

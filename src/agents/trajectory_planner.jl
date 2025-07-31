@@ -8,9 +8,11 @@ using POMDPTools
 using Distributions
 using Random
 using ..Types
-
+using Infiltrator
 # Import types from the parent module
-import ..Types.Trajectory, ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.RangeLimitedSensor, ..Types.GridObservation
+import ..Types.Trajectory, ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.ComplexTrajectory, ..Types.RangeLimitedSensor, ..Types.GridObservation
+# Import battery management functions
+import ..Types.update_battery!, ..Types.check_battery_feasible
 
 export get_position_at_time, calculate_trajectory_period, execute_plan, get_action_from_tree
 
@@ -53,6 +55,29 @@ function get_position_at_time(trajectory::LinearTrajectory, time::Int, phase_off
 end
 
 """
+get_position_at_time(trajectory::ComplexTrajectory, time::Int)
+Gets agent position at a specific time for complex trajectory
+"""
+function get_position_at_time(trajectory::ComplexTrajectory, time::Int)
+    # Calculate which waypoint we're at based on time
+    waypoint_index = (time % trajectory.period) + 1
+    if waypoint_index > length(trajectory.waypoints)
+        waypoint_index = 1  # Wrap around
+    end
+    return trajectory.waypoints[waypoint_index]
+end
+
+"""
+get_position_at_time(trajectory::ComplexTrajectory, time::Int, phase_offset::Int)
+Gets agent position at a specific time for complex trajectory with phase offset
+"""
+function get_position_at_time(trajectory::ComplexTrajectory, time::Int, phase_offset::Int)
+    # Apply phase offset to time
+    adjusted_time = time + phase_offset
+    return get_position_at_time(trajectory, adjusted_time)
+end
+
+"""
 calculate_trajectory_period(trajectory::Trajectory)
 Calculates the period of a trajectory
 """
@@ -61,6 +86,10 @@ function calculate_trajectory_period(trajectory::CircularTrajectory)
 end
 
 function calculate_trajectory_period(trajectory::LinearTrajectory)
+    return trajectory.period
+end
+
+function calculate_trajectory_period(trajectory::ComplexTrajectory)
     return trajectory.period
 end
 
@@ -102,6 +131,11 @@ function get_trajectory_waypoints(trajectory::LinearTrajectory, num_points::Int)
     return waypoints
 end
 
+function get_trajectory_waypoints(trajectory::ComplexTrajectory, num_points::Int)
+    # For complex trajectory, return the actual waypoints
+    return copy(trajectory.waypoints)
+end
+
 """
 create_circular_trajectory(center_x::Int, center_y::Int, radius::Float64, period::Int)
 Creates a circular trajectory
@@ -116,6 +150,14 @@ Creates a linear trajectory
 """
 function create_linear_trajectory(start_x::Int, start_y::Int, end_x::Int, end_y::Int, period::Int)
     return LinearTrajectory(start_x, start_y, end_x, end_y, period)
+end
+
+"""
+create_complex_trajectory(waypoints::Vector{Tuple{Int, Int}}, period::Int)
+Creates a complex trajectory with multiple waypoints
+"""
+function create_complex_trajectory(waypoints::Vector{Tuple{Int, Int}}, period::Int)
+    return ComplexTrajectory(waypoints, period, 1.0)
 end
 
 """
@@ -185,25 +227,36 @@ end
 
 """
 execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation})
-Execute agent's current plan and return the next action to take
+Execute agent's current plan and return the next action to take with battery constraints
+Note: Charging happens in the main simulation loop, not here
 """
 function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation})
     agent_id = agent.id
     
-    if plan === nothing
+    if plan === nothing && plan_type != :policy
         # No plan available, use default wait action
         return SensingAction(agent_id, Tuple{Int, Int}[], false)
     end
-    
-    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx
-        # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, greedy sequence, or macro-approximate sequence
+    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx || plan_type == :macro_approx_099 || plan_type == :macro_approx_095 || plan_type == :macro_approx_090 || plan_type == :prior_based || plan_type == :pbvi
+        # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, greedy sequence, macro-approximate sequence, or prior-based sequence
         if !isempty(plan)
             # Get the action at the current plan index
             if agent.plan_index <= length(plan)
-                action = plan[agent.plan_index]
-                # Increment plan index for next execution
-                agent.plan_index += 1
-                return action
+                planned_action = plan[agent.plan_index]
+                
+                # Check if the planned action is battery feasible
+                if check_battery_feasible(agent, planned_action, agent.battery_level)
+                    # Execute the planned action
+                    num_observations = length(planned_action.target_cells)
+                    # Discharge for observations (charging happens in main loop)
+                    total_cost = agent.observation_cost * num_observations
+                    agent.battery_level = max(0.0, agent.battery_level - total_cost)
+                    agent.plan_index += 1
+                    return planned_action
+                else
+                    # Not enough battery for planned action, wait
+                    return SensingAction(agent_id, Tuple{Int, Int}[], false)
+                end
             else
                 # Plan exhausted, use wait action
                 return SensingAction(agent_id, Tuple{Int, Int}[], false)
@@ -214,13 +267,36 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
         end
         
     elseif plan_type == :policy
-        # Execute policy tree (closed-loop)
-        action = get_action_from_tree(plan, local_obs_history)
-        if action === nothing
+        # Execute reactive policy (closed-loop)
+        if agent.reactive_policy !== nothing
+            # Use the reactive policy function directly
+            planned_action = agent.reactive_policy(local_obs_history)
+        else
+            # Fallback to old policy tree method (only if plan is not nothing)
+            if plan !== nothing
+                planned_action = get_action_from_tree(plan, local_obs_history)
+            else
+                planned_action = nothing
+            end
+        end
+        @infiltrate
+        
+        if planned_action === nothing
             # No policy found, use wait action
             return SensingAction(agent_id, Tuple{Int, Int}[], false)
         else
-            return action
+            # Check if the planned action is battery feasible
+            if check_battery_feasible(agent, planned_action, agent.battery_level)
+                # Execute the planned action
+                num_observations = length(planned_action.target_cells)
+                # Discharge for observations (charging happens in main loop)
+                total_cost = agent.observation_cost * num_observations
+                agent.battery_level = max(0.0, agent.battery_level - total_cost)
+                return planned_action
+            else
+                # Not enough battery for planned action, wait
+                return SensingAction(agent_id, Tuple{Int, Int}[], false)
+            end
         end
         
     else

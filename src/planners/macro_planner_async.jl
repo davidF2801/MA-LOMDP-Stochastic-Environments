@@ -7,10 +7,11 @@ using LinearAlgebra
 using Infiltrator
 using ..Types
 import ..Agents.BeliefManagement: sample_from_belief
+import ..Types: check_battery_feasible, simulate_battery_evolution
 # Import types from the parent module (Planners)
 import ..EventState, ..NO_EVENT, ..EVENT_PRESENT
 import ..EventState2, ..NO_EVENT_2, ..EVENT_PRESENT_2
-import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..RangeLimitedSensor, ..EventMap
+import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..ComplexTrajectory, ..RangeLimitedSensor, ..EventMap
 # Import trajectory functions
 import ..Agents.TrajectoryPlanner.get_position_at_time
 # Import DBN functions for transition modeling
@@ -88,7 +89,7 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
 end
 
 """
-Generate all possible action sequences of length C considering agent trajectory
+Generate all possible action sequences of length C considering agent trajectory and battery constraints
 """
 function generate_action_sequences(agent, env, C::Int, phase_offset::Int=0)
     if C == 0
@@ -102,7 +103,7 @@ function generate_action_sequences(agent, env, C::Int, phase_offset::Int=0)
         push!(trajectory_positions, pos)
     end
     
-    # 2. Get available actions for each timestep
+    # 2. Get available actions for each timestep with battery constraints
     actions_per_timestep = Vector{Vector{SensingAction}}()
     for t in 1:C
         pos = trajectory_positions[t]
@@ -111,18 +112,25 @@ function generate_action_sequences(agent, env, C::Int, phase_offset::Int=0)
         # Generate actions for this timestep
         timestep_actions = SensingAction[]
         
-        # Add wait action
+        # Add wait action (always feasible)
         push!(timestep_actions, SensingAction(agent.id, Tuple{Int, Int}[], false))
         
-        # Add single-cell sensing actions
+        # Add single-cell sensing actions (check battery)
         for cell in for_cells
-            push!(timestep_actions, SensingAction(agent.id, [cell], false))
+            action = SensingAction(agent.id, [cell], false)
+            if check_battery_feasible(agent, action, agent.battery_level)
+                push!(timestep_actions, action)
+            end
         end
-        # Add multi-cell sensing actions (up to max_sensing_targets)
+        
+        # Add multi-cell sensing actions (check battery)
         if length(for_cells) > 1 && env.max_sensing_targets > 1
             for subset_size in 2:min(env.max_sensing_targets, length(for_cells))
                 for subset in combinations(for_cells, subset_size)
-                    push!(timestep_actions, SensingAction(agent.id, collect(subset), false))
+                    action = SensingAction(agent.id, collect(subset), false)
+                    if check_battery_feasible(agent, action, agent.battery_level)
+                        push!(timestep_actions, action)
+                    end
                 end
             end
         end
@@ -191,27 +199,39 @@ function get_field_of_regard_at_position(agent, position, env)
     x, y = position
     fov_cells = Tuple{Int, Int}[]
     
-    # Check if we want row-only visibility (sensor range = 0 means row-only)
-    if agent.sensor.range == 0.0
+    # Check sensor pattern
+    if agent.sensor.pattern == :cross
+        # Cross-shaped sensor: agent's position and adjacent cells
+        ax, ay = position
+        for dx in -1:1, dy in -1:1
+            nx, ny = ax + dx, ay + dy
+            if 1 <= nx <= env.width && 1 <= ny <= env.height
+                # Only include cross pattern (not diagonal)
+                if (dx == 0 && dy == 0) || (dx == 0 && dy != 0) || (dx != 0 && dy == 0)
+                    push!(fov_cells, (nx, ny))
+                end
+            end
+        end
+    elseif agent.sensor.pattern == :row_only || agent.sensor.range == 0.0
         # Row-only visibility: agent can only see cells in its current row
         for nx in 1:env.width
             push!(fov_cells, (nx, y))
         end
     else
         # Standard sensor range visibility
-    sensor_range = round(Int, agent.sensor.range)
-    for dx in -sensor_range:sensor_range
-        for dy in -sensor_range:sensor_range
-            nx, ny = x + dx, y + dy
-            if 1 <= nx <= env.width && 1 <= ny <= env.height
-                # Check if within sensor range
-                distance = sqrt(dx^2 + dy^2)
-                if distance <= agent.sensor.range
-                    push!(fov_cells, (nx, ny))
+        sensor_range = round(Int, agent.sensor.range)
+        for dx in -sensor_range:sensor_range
+            for dy in -sensor_range:sensor_range
+                nx, ny = x + dx, y + dy
+                if 1 <= nx <= env.width && 1 <= ny <= env.height
+                    # Check if within sensor range
+                    distance = sqrt(dx^2 + dy^2)
+                    if distance <= agent.sensor.range
+                        push!(fov_cells, (nx, ny))
+                    end
                 end
             end
         end
-    end
     end
     return fov_cells
 end
@@ -252,7 +272,6 @@ function precompute_belief_branches(env, agent, gs_state)
     # Start with uniform belief distribution (we knew nothing at t=0)
     B = initialize_uniform_belief(env)
     for t in 0:(t_clean-1)
-        B = evolve_no_obs(B, env)  # Contagion-aware update
         # Apply known observations (perfect observations)
         for (agent_j, action_j) in get_known_observations_at_time(t, gs_state)
             for cell in action_j.target_cells
@@ -262,6 +281,7 @@ function precompute_belief_branches(env, agent, gs_state)
                 end
             end
         end
+        B = evolve_no_obs(B, env)  # Contagion-aware update
     end
 
     # Step 3: Initialize branching structure at t_clean
@@ -309,12 +329,10 @@ function precompute_belief_branches(env, agent, gs_state)
             println("    🔄 Processing timestep $(t)")
             new_branches = Vector{Tuple{Belief, Float64}}()
             for (B_cur, p_branch) in B_branches[t]
-
-                B_evolved = evolve_no_obs(B_cur, env)
                 
                 # Check which observations need branching based on the current window
                 obs_set = Vector{Tuple{Int, SensingAction}}()  # Unknown observations for branching
-                
+                B_evolved = deepcopy(B_cur)
                 # First, apply known observations from history (deterministic)
                 known_obs = get_known_observations_at_time(t, gs_state)
                 for (agent_k, action_k) in known_obs
@@ -351,13 +369,16 @@ function precompute_belief_branches(env, agent, gs_state)
                         for (cell, observed_state) in observation_combo
                             B_new = collapse_belief_to(B_new, cell, observed_state)
                         end
+                        B_new = evolve_no_obs(B_new, env)
                         push!(new_branches, (B_new, p_branch * probability))
-
                     end
                 else
+                    B_evolved = evolve_no_obs(B_evolved, env)
                     push!(new_branches, (B_evolved, p_branch))
                 end
+                
             end
+            
             B_branches[t + 1] = merge_equivalent_beliefs(new_branches)
         end
     end
@@ -365,7 +386,7 @@ function precompute_belief_branches(env, agent, gs_state)
 end
 
 """
-Calculate reward for a macro-script using pre-computed belief branches
+Calculate reward for a macro-script using pre-computed belief branches with battery constraints
 """
 function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts, C::Int, env, agent, B_branches, gs_state, predict_future_actions::Bool=false)
     γ = env.discount
@@ -374,20 +395,36 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
     # Get current sync time for agent i
     tau_i = gs_state.time_step
     
-    # Step 6: Simulate macro-script from tau_i forward (agent i)
+    # Step 6: Simulate macro-script from tau_i forward (agent i) with battery constraints
     R_seq = zeros(length(seq))
     B_post = Dict{Int, Vector{Tuple{Belief, Float64}}}()
     B_post[tau_i] = B_branches[tau_i]
+    
+    # Track battery evolution for the planning agent
+    current_battery = agent.battery_level
     
     # Track which agents we've already generated sub-plans for
     agents_with_sub_plans = Set{Int}()
     
     # Store sub-plans mapping: agent_id -> Dict{global_timestep -> action}
     sub_plans_mapping = Dict{Int, Dict{Int, SensingAction}}()
+    for k in 1:length(seq)
+        a_i = seq[k]
+        t_global = tau_i + k - 1
+        current_battery = simulate_battery_evolution(agent, a_i, current_battery)
+        # Check if this action is battery feasible
+        if !check_battery_feasible(agent, a_i, current_battery)
+            # This action would deplete the battery - prune this branch
+            # Return a very low reward to discourage this sequence
+            return -1000.0
+        end
+     
+    end
     
     for k in 1:length(seq)
         a_i = seq[k]
         t_global = tau_i + k - 1
+        # Simulate battery evolution        
         new_branches = Vector{Tuple{Belief, Float64}}()
         for (B, p_branch) in B_post[t_global]
             obs_set = Vector{Tuple{Int, SensingAction}}(get_scheduled_observations_at_time(t_global, gs_state))
@@ -497,7 +534,8 @@ function compute_expected_reward(belief_branches, action, c_obs)
             H_before = calculate_cell_entropy(B_cur, cell)
             H_after = 0.0
             info_gain = H_before - H_after
-            weighted_gain = info_gain
+            @infiltrate
+            weighted_gain = info_gain*get_event_probability(B_cur, cell)
 
             expected_reward += p_branch * weighted_gain
         end

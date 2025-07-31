@@ -9,7 +9,7 @@ using ..Types
 # Import types from the parent module
 import ..Types.EventState, ..Types.NO_EVENT, ..Types.EVENT_PRESENT, ..Types.EVENT_SPREADING, ..Types.EVENT_DECAYING
 import ..Types.SensingAction, ..Types.GridObservation, ..Types.Agent
-import ..Types.Trajectory, ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.RangeLimitedSensor
+import ..Types.Trajectory, ..Types.CircularTrajectory, ..Types.LinearTrajectory, ..Types.ComplexTrajectory, ..Types.RangeLimitedSensor
 import ..Types.EventDynamics, ..Types.TwoStateEventDynamics, ..Types.Deterministic
 import ..Types.DynamicsMode, ..Types.toy_dbn, ..Types.rsp
 
@@ -50,13 +50,18 @@ The FOV (Field of View) is then a subset of these cells chosen as actions.
 """
 function get_observable_cells(locality::LocalityFunction, phase::Int)
     # Get agent position at this phase
-            #t_normalized = (adjusted_time % agent.trajectory.period) / agent.trajectory.period
-    step_x = abs(locality.trajectory.end_x - locality.trajectory.start_x)/(locality.trajectory.period-1)
-    step_y = abs(locality.trajectory.end_y - locality.trajectory.start_y)/(locality.trajectory.period-1)
-    x = round(Int, locality.trajectory.start_x + phase * step_x)
-    y = round(Int, locality.trajectory.start_y + phase * step_y)
-    agent_pos = (x, y)
-    #agent_pos = get_position_at_time(locality.trajectory, phase)
+    if typeof(locality.trajectory) <: ComplexTrajectory
+        # For complex trajectory, use the waypoint-based position calculation
+        agent_pos = get_position_at_time(locality.trajectory, phase)
+    else
+        # For linear trajectory (legacy calculation)
+        step_x = abs(locality.trajectory.end_x - locality.trajectory.start_x)/(locality.trajectory.period-1)
+        step_y = abs(locality.trajectory.end_y - locality.trajectory.start_y)/(locality.trajectory.period-1)
+        x = round(Int, locality.trajectory.start_x + phase * step_x)
+        y = round(Int, locality.trajectory.start_y + phase * step_y)
+        agent_pos = (x, y)
+    end
+    
     # Get all cells within sensor range (FOR - Field of Regard)
     observable_cells = Tuple{Int, Int}[]
     
@@ -97,6 +102,10 @@ function get_trajectory_period(trajectory::CircularTrajectory)
 end
 
 function get_trajectory_period(trajectory::LinearTrajectory)
+    return trajectory.period
+end
+
+function get_trajectory_period(trajectory::ComplexTrajectory)
     return trajectory.period
 end
 
@@ -550,6 +559,29 @@ function get_position_at_time(trajectory::LinearTrajectory, time::Int, phase_off
 end
 
 """
+get_position_at_time(trajectory::ComplexTrajectory, time::Int)
+Gets agent position at a specific time for complex trajectory
+"""
+function get_position_at_time(trajectory::ComplexTrajectory, time::Int)
+    # Calculate which waypoint we're at based on time
+    waypoint_index = (time % trajectory.period) + 1
+    if waypoint_index > length(trajectory.waypoints)
+        waypoint_index = 1  # Wrap around
+    end
+    return trajectory.waypoints[waypoint_index]
+end
+
+"""
+get_position_at_time(trajectory::ComplexTrajectory, time::Int, phase_offset::Int)
+Gets agent position at a specific time for complex trajectory with phase offset
+"""
+function get_position_at_time(trajectory::ComplexTrajectory, time::Int, phase_offset::Int)
+    # Apply phase offset to time
+    adjusted_time = time + phase_offset
+    return get_position_at_time(trajectory, adjusted_time)
+end
+
+"""
 generate_observation(sensor::RangeLimitedSensor, agent_pos::Tuple{Int, Int}, event_map::Matrix{EventState}, target_cells::Vector{Tuple{Int, Int}})
 Generates observations for the specified target cells
 """
@@ -574,6 +606,31 @@ Checks if target position is within sensor range
 function is_within_range(sensor::RangeLimitedSensor, agent_pos::Tuple{Int, Int}, target_pos::Tuple{Int, Int})
     distance = sqrt((target_pos[1] - agent_pos[1])^2 + (target_pos[2] - agent_pos[2])^2)
     return distance <= sensor.range
+end
+
+"""
+is_within_range(sensor::RangeLimitedSensor, agent_pos::Tuple{Int, Int}, target_pos::Tuple{Int, Int})
+Checks if target position is within sensor range based on pattern
+"""
+function is_within_range(sensor::RangeLimitedSensor, agent_pos::Tuple{Int, Int}, target_pos::Tuple{Int, Int})
+    ax, ay = agent_pos
+    tx, ty = target_pos
+    
+    if sensor.pattern == :cross
+        # Cross-shaped sensor: can see the cell itself and one cell in each direction
+        return (tx == ax && ty == ay) ||  # Same cell
+               (tx == ax && ty == ay - 1) ||  # Up
+               (tx == ax && ty == ay + 1) ||  # Down
+               (tx == ax - 1 && ty == ay) ||  # Left
+               (tx == ax + 1 && ty == ay)     # Right
+    elseif sensor.pattern == :row_only
+        # Row-only visibility: can only see cells in the same row
+        return ty == ay
+    else
+        # Default circular pattern: check distance
+        distance = sqrt((tx - ax)^2 + (ty - ay)^2)
+        return distance <= sensor.range
+    end
 end
 
 """

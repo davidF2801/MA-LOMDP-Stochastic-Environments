@@ -15,6 +15,8 @@ include("policy_tree_planner.jl")
 include("macro_planner_random.jl")
 include("macro_planner_sweep.jl")
 include("macro_planner_greedy.jl")
+include("macro_planner_prior_based.jl")
+include("macro_planner_pbvi.jl")
 
 using .MacroPlannerAsync
 using .MacroPlannerAsyncApprox
@@ -22,6 +24,8 @@ using .PolicyTreePlanner
 using .MacroPlannerRandom
 using .MacroPlannerSweep
 using .MacroPlannerGreedy
+using .MacroPlannerPriorBased
+using .MacroPlannerPBVI
 
 # Import Agent type from TrajectoryPlanner
 include("../agents/trajectory_planner.jl")
@@ -73,7 +77,6 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
     
     println("🛰️  Ground Station: Checking for sync opportunities at time $(t)")
     gs_state.time_step = t
-    
     for (i, agent) in enumerate(agents)
         agent_id = agent.id
         # Check if agent is in range for synchronization
@@ -98,14 +101,12 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 end
             end
             update_global_belief!(gs_state.global_belief, observations, env, gs_state, t)
-            
             # Calculate contact horizon (steps until next sync)
             C_i = calculate_contact_horizon(agent, t, env)
             println("⏰ Contact horizon for agent $(agent_id): $(C_i) steps")
             
             # Get other agents' current plans
             other_plans = get_other_agent_plans(gs_state, agent_id)
-            
             # Compute new plan based on planning mode
             if planning_mode == :script
                 println("📋 Computing macro-script for agent $(agent_id)")
@@ -119,8 +120,12 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("⏱️  Agent $(agent_id) planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :policy
                 println("🌳 Computing policy tree for agent $(agent_id)")
-                new_plan, planning_time = PolicyTreePlanner.best_policy_tree(env, gs_state.global_belief, agent, C_i, gs_state, rng=rng)
+                reactive_policy, planning_time = PolicyTreePlanner.best_policy_tree(env, gs_state.global_belief, agent, C_i, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :policy
+                
+                # For policy planning, store the reactive policy in the agent
+                # The agent already has the reactive policy stored from best_policy_tree
+                # We don't store it in gs_state.agent_plans since that's for action sequences
                 
                 # Track planning time
                 push!(gs_state.planning_times[agent_id], planning_time)
@@ -131,7 +136,6 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("🎲 Computing random plan for agent $(agent_id)")
                 new_plan, planning_time = MacroPlannerRandom.best_script_random(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :random
-                
                 # Track planning time
                 push!(gs_state.planning_times[agent_id], planning_time)
                 gs_state.total_planning_time += planning_time
@@ -166,28 +170,51 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 gs_state.total_planning_time += planning_time
                 gs_state.num_plans_computed += 1
                 println("⏱️  Agent $(agent_id) greedy planning time: $(round(planning_time, digits=3)) seconds")
-            elseif planning_mode == :macro_approx
+            elseif planning_mode == :macro_approx || planning_mode == :macro_approx_099 || planning_mode == :macro_approx_095 || planning_mode == :macro_approx_090
                 println("🔧 Computing macro-approximate plan for agent $(agent_id)")
                 new_plan, planning_time = MacroPlannerAsyncApprox.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
-                gs_state.agent_plan_types[agent_id] = :macro_approx
+                gs_state.agent_plan_types[agent_id] = planning_mode
                 
                 # Track planning time
                 push!(gs_state.planning_times[agent_id], planning_time)
                 gs_state.total_planning_time += planning_time
                 gs_state.num_plans_computed += 1
                 println("⏱️  Agent $(agent_id) macro-approximate planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :prior_based
+                println("📊 Computing prior-based plan for agent $(agent_id)")
+                new_plan, planning_time = MacroPlannerPriorBased.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :prior_based
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) prior-based planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :pbvi
+                println("🧠 Computing PBVI plan for agent $(agent_id)")
+                new_plan, planning_time = MacroPlannerPBVI.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :pbvi
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) PBVI planning time: $(round(planning_time, digits=3)) seconds")
             else
                 error("Unknown planning mode: $(planning_mode)")
             end
             
-            # Store plan in ground station state
-            gs_state.agent_plans[agent_id] = new_plan
-            
-            # Reset agent's plan index for the new plan
-            agent.plan_index = 1
-            
-            # Store plan in ground station state (agents don't store plans directly)
-            # The plan will be executed by the ground station when needed
+            # Store plan in ground station state (for non-policy modes)
+            if planning_mode != :policy
+                gs_state.agent_plans[agent_id] = new_plan
+                # Reset agent's plan index for the new plan
+                agent.plan_index = 1
+            else
+                # For policy mode, the reactive policy is already stored in the agent
+                # No need to store anything in gs_state.agent_plans
+                # Reset agent's plan index (though not used for policies)
+                agent.plan_index = 1
+            end
             
             # Update last sync time
             gs_state.agent_last_sync[agent_id] = t
@@ -264,8 +291,6 @@ function update_global_belief!(global_belief, observations::Vector{GridObservati
     B = initialize_uniform_belief(env)
     
     for t in 0:(t_clean-1)
-        B = evolve_no_obs(B, env)  # Contagion-aware update
-        
         # Apply known observations (perfect observations)
         for (agent_j, action_j) in get_known_observations_at_time(t, gs_state)
             for cell in action_j.target_cells
@@ -275,6 +300,7 @@ function update_global_belief!(global_belief, observations::Vector{GridObservati
                 end
             end
         end
+        B = evolve_no_obs(B, env)  # Contagion-aware update
     end
     
     # Update the global belief with the belief at t_clean
@@ -314,7 +340,7 @@ Calculate contact horizon (steps until next sync opportunity)
 function calculate_contact_horizon(agent, current_time::Int, env)
     # For a grid with period equal to height, agents can sync every period steps
     # Return a shorter horizon for more frequent planning
-    return env.height  # Steps until next sync (matches grid period)
+    return agent.trajectory.period  # Steps until next sync (matches grid period)
 end
 
 """

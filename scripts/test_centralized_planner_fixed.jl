@@ -72,7 +72,9 @@ function test_fixed_centralized_8x3_scenario()
     end
     
     # Create spatial grid environment
-    env = SpatialGrid(width, height, agents, event_dynamics, locality_functions)
+    # Use middle of grid as ground station position
+    ground_station_pos = (div(width, 2), div(height, 2))
+    env = SpatialGrid(width, height, agents, event_dynamics, locality_functions, ground_station_pos, 0.95)
     
     println("✅ Environment created successfully")
     println("📊 Event dynamics: 2-state system (NO_EVENT ↔ EVENT_PRESENT)")
