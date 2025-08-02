@@ -435,22 +435,22 @@ end
 """
 Evolve belief without observations using Díaz-Avalos formula
 """
-function evolve_no_obs(B::Belief, env)
+function evolve_no_obs(B::Belief, env; calculate_uncertainty::Bool=true)
     # Check cache first
-    cache_key = get_belief_cache_key(B, env)
-    if haskey(BELIEF_EVOLUTION_CACHE, cache_key)
-        CACHE_STATS[:hits] += 1
-        cached_belief = BELIEF_EVOLUTION_CACHE[cache_key]
-        # Return a copy to avoid modifying the cached version
-        return Belief(
-            copy(cached_belief.event_distributions),
-            copy(cached_belief.uncertainty_map),
-            cached_belief.last_update,
-            copy(cached_belief.history)
-        )
-    end
+    # cache_key = get_belief_cache_key(B, env)
+    # if haskey(BELIEF_EVOLUTION_CACHE, cache_key)
+    #     CACHE_STATS[:hits] += 1
+    #     cached_belief = BELIEF_EVOLUTION_CACHE[cache_key]
+    #     # Return a copy to avoid modifying the cached version
+    #     return Belief(
+    #         copy(cached_belief.event_distributions),
+    #         copy(cached_belief.uncertainty_map),
+    #         cached_belief.last_update,
+    #         copy(cached_belief.history)
+    #     )
+    # end
     
-    CACHE_STATS[:misses] += 1
+    # CACHE_STATS[:misses] += 1
     
     # Create new belief with evolved distributions
     new_distributions = similar(B.event_distributions)
@@ -481,17 +481,90 @@ function evolve_no_obs(B::Belief, env)
         end
     end
     
-    # Normalize and update uncertainty
+    # Normalize distributions
     new_distributions = normalize_belief_distributions(new_distributions)
-    uncertainty_map = calculate_uncertainty_map_from_distributions(new_distributions)
+    
+    # Calculate uncertainty map only if requested
+    uncertainty_map = calculate_uncertainty ? calculate_uncertainty_map_from_distributions(new_distributions) : similar(B.uncertainty_map)
     
     evolved_belief = Belief(new_distributions, uncertainty_map, B.last_update + 1, B.history)
     
     # Cache the result
-    BELIEF_EVOLUTION_CACHE[cache_key] = evolved_belief
+    # BELIEF_EVOLUTION_CACHE[cache_key] = evolved_belief
     
     return evolved_belief
 end
+using ImageFiltering
+
+"""
+Evolve belief without observations using Díaz-Avalos formula (fast version).
+Equivalent to `evolve_no_obs`, but avoids neighbor joint-state enumeration
+by using expected contagion from neighbor marginals.
+"""
+function evolve_no_obs_fast(B::Belief, env; calculate_uncertainty::Bool=true)
+    # Check cache first
+    # cache_key = get_belief_cache_key(B, env)
+    # if haskey(BELIEF_EVOLUTION_CACHE, cache_key)
+    #     CACHE_STATS[:hits] += 1
+    #     cached_belief = BELIEF_EVOLUTION_CACHE[cache_key]
+    #     return Belief(
+    #         copy(cached_belief.event_distributions),
+    #         copy(cached_belief.uncertainty_map),
+    #         cached_belief.last_update,
+    #         copy(cached_belief.history)
+    #     )
+    # end
+    # CACHE_STATS[:misses] += 1
+
+    # Create new belief with evolved distributions
+    new_distributions = similar(B.event_distributions)
+    num_states, height, width = size(new_distributions)
+    @assert num_states == 2 "fast version currently supports 2 states"
+
+    for y in 1:height, x in 1:width
+        current_belief = B.event_distributions[:, y, x]
+        neighbor_beliefs = get_neighbor_beliefs(B, x, y)
+
+        # Get cell-specific parameters
+        cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
+
+        # Compute expected fraction of active neighbours
+        active_probs = [nb[2] for nb in neighbor_beliefs]  # P(EVENT) for each neighbor
+        norm_active = isempty(active_probs) ? 0.0 : mean(active_probs)
+
+        # Precompute contagion once
+        contagion = 1 - exp(-cell_params.alpha * norm_active)
+
+        # Update distribution for this cell
+        # Case current_state = 0 (NO_EVENT)
+        p_event_from_no = (1 - exp(-(cell_params.beta0 + cell_params.lambda + contagion)))
+        p_no_from_no    = 1 - p_event_from_no
+
+        # Case current_state = 1 (EVENT)
+        p_event_from_event = cell_params.delta
+        p_no_from_event    = 1 - cell_params.delta
+
+        # Combine with current belief
+        new_distributions[2, y, x] = current_belief[1] * p_event_from_no +
+                                     current_belief[2] * p_event_from_event
+        new_distributions[1, y, x] = current_belief[1] * p_no_from_no +
+                                     current_belief[2] * p_no_from_event
+    end
+
+    # Normalize distributions
+    new_distributions = normalize_belief_distributions(new_distributions)
+
+    # Calculate uncertainty map only if requested
+    uncertainty_map = calculate_uncertainty ?
+        calculate_uncertainty_map_from_distributions(new_distributions) :
+        similar(B.uncertainty_map)
+
+    evolved_belief = Belief(new_distributions, uncertainty_map, B.last_update + 1, B.history)
+
+    #BELIEF_EVOLUTION_CACHE[cache_key] = evolved_belief
+    return evolved_belief
+end
+
 
 """
 Get neighbor beliefs for a cell

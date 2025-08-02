@@ -6,6 +6,7 @@ using Random
 using LinearAlgebra
 using Infiltrator
 using Statistics
+using Base.Threads
 using ..Types
 import ..Agents.BeliefManagement: sample_from_belief
 import ..Types: check_battery_feasible, simulate_battery_evolution
@@ -21,12 +22,13 @@ import ..Environment.EventDynamicsModule.DBNTransitionModel2, ..Environment.Even
 import ..Agents.BeliefManagement
 import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
        ..Agents.BeliefManagement.calculate_uncertainty_from_distribution, ..Agents.BeliefManagement.predict_belief_rsp,
-       ..Agents.BeliefManagement.evolve_no_obs, ..Agents.BeliefManagement.get_neighbor_beliefs,
+       ..Agents.BeliefManagement.evolve_no_obs,..Agents.BeliefManagement.evolve_no_obs_fast, ..Agents.BeliefManagement.get_neighbor_beliefs,
        ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.product,
        ..Agents.BeliefManagement.normalize_belief_distributions, ..Agents.BeliefManagement.collapse_belief_to,
        ..Agents.BeliefManagement.enumerate_all_possible_outcomes, ..Agents.BeliefManagement.merge_equivalent_beliefs,
        ..Agents.BeliefManagement.calculate_cell_entropy, ..Agents.BeliefManagement.get_event_probability,
-       ..Agents.BeliefManagement.clear_belief_evolution_cache!, ..Agents.BeliefManagement.get_cache_stats
+       ..Agents.BeliefManagement.clear_belief_evolution_cache!, ..Agents.BeliefManagement.get_cache_stats,
+       ..Agents.BeliefManagement.beliefs_are_equivalent
 
 export best_script, calculate_macro_script_reward
 
@@ -41,21 +43,30 @@ Base.deepcopy(cv::ClockVector) = ClockVector(deepcopy(cv.phases))
 
 struct BeliefPoint
     clock::ClockVector
-    belief::Belief
+    digest::UInt64          # immutable, pre-computed hash
+    belief::Belief          # still carried for look-ups
 end
 
 # Add copy method for BeliefPoint
-Base.copy(bp::BeliefPoint) = BeliefPoint(copy(bp.clock), deepcopy(bp.belief))
-Base.deepcopy(bp::BeliefPoint) = BeliefPoint(deepcopy(bp.clock), deepcopy(bp.belief))
+Base.copy(bp::BeliefPoint) = BeliefPoint(copy(bp.clock), bp.digest, deepcopy(bp.belief))
+Base.deepcopy(bp::BeliefPoint) = BeliefPoint(deepcopy(bp.clock), bp.digest, deepcopy(bp.belief))
 
 # Add hash and equality methods for dictionary keys
 Base.hash(cv::ClockVector, h::UInt) = hash(cv.phases, h)
-Base.hash(bp::BeliefPoint, h::UInt) = hash(bp.clock, hash(bp.belief, h))
+Base.hash(bp::BeliefPoint, h::UInt) = hash(bp.clock, hash(bp.digest, h))
 
 Base.isequal(cv1::ClockVector, cv2::ClockVector) = cv1.phases == cv2.phases
-Base.isequal(bp1::BeliefPoint, bp2::BeliefPoint) = isequal(bp1.clock, bp2.clock) && isequal(bp1.belief, bp2.belief)
+Base.isequal(bp1::BeliefPoint, bp2::BeliefPoint) = isequal(bp1.clock, bp2.clock) && beliefs_are_equivalent(bp1.belief, bp2.belief)
 Base.:(==)(cv1::ClockVector, cv2::ClockVector) = isequal(cv1, cv2)
 Base.:(==)(bp1::BeliefPoint, bp2::BeliefPoint) = isequal(bp1, bp2)
+
+"""
+Create a BeliefPoint with pre-computed digest
+"""
+function BeliefPoint(clock::ClockVector, belief::Belief)
+    digest = hash(belief.event_distributions, UInt(0))
+    return BeliefPoint(clock, digest, belief)
+end
 
 """
 best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state)::Vector{SensingAction}
@@ -64,7 +75,7 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state):
   – Return the best sequence
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=5, N_particles::Int=4, N_sweeps::Int=10, ε::Float64=0.01)
+                    N_seed::Int=10, N_particles::Int=64, N_sweeps::Int=50, ε::Float64=0.1)
     # Start timing
     start_time = time()
     
@@ -125,7 +136,7 @@ function sample_system_state_at_τi(B_clean::Belief, agent_i::Agent, τ_i::Int, 
                 end
             end
         end
-        b = evolve_no_obs(b, env)
+        b = evolve_no_obs_fast(b, env, calculate_uncertainty=false)
     end
     
     # Create clock vector at τ_i
@@ -145,7 +156,7 @@ function sample_system_state_at_τi(B_clean::Belief, agent_i::Agent, τ_i::Int, 
             push!(agent_phases, 0)
         else
             # Other agents: relative phase offset
-            relative_offset = (agent.phase_offset - agent_i.phase_offset) % agent.trajectory.period
+            relative_offset = mod((agent.phase_offset - agent_i.phase_offset), agent.trajectory.period)
             push!(agent_phases, relative_offset)
         end
     end
@@ -159,31 +170,7 @@ Simulate one step forward
 """
 function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::SensingAction, 
                           agent_i::Agent, agents_j::Vector{Agent}, env, gs_state)
-    # Get current global time from the first agent's phase
-    t_global = gs_state.time_step
-    
-    # Sample outcomes actually happening this step
-    state_i = nothing
-    if !isempty(action_i.target_cells)
-        cell_i = action_i.target_cells[1]  # Assume single cell for now
-        state_i = sample_event_state_from(b_sys, cell_i)
-    end
-    
-    # Sample other agents' observations
-    buffer = Dict{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}()
-    for j in agents_j
-        if j_senses_at_time(j, t_global, gs_state)
-            cell_j = scheduled_cell(j, t_global, gs_state)
-            if cell_j !== nothing
-                state_j = sample_event_state_from(b_sys, cell_j)
-                if !haskey(buffer, j.id)
-                    buffer[j.id] = Vector{Tuple{Tuple{Int, Int}, EventState}}()
-                end
-                push!(buffer[j.id], (cell_j, state_j))
-            end
-        end
-    end
-    
+
     # Calculate information gain
     r_step = 0.0
     if !isempty(action_i.target_cells)
@@ -192,34 +179,54 @@ function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::Sensi
             # Simplified: assume perfect observation
             H_after = 0.0
             info_gain = H_before - H_after
-            event_prob = get_event_probability(b_sys, cell)
-            r_step += info_gain * event_prob
+            #event_prob = get_event_probability(b_sys, cell)
+            r_step += info_gain
         end
     end
-    
-    # Dump buffers when agents sync
-    if t_global + 1 == next_sync_time(agent_i, gs_state)
-        if state_i !== nothing && !isempty(action_i.target_cells)
-            b_sys = collapse_belief_to(b_sys, action_i.target_cells[1], state_i)
-        end
+
+    # Calculate global time from agent_i's phase in the clock vector
+    agent_i_index = find_agent_index(agent_i, env)
+    if agent_i_index == 2
+        @infiltrate
     end
-    
+    if agent_i_index === nothing
+        t_global = gs_state.time_step  # Fallback
+    else
+        # Calculate global time based on agent_i's phase
+        # The phase represents how many steps ahead we are from the current gs_state.time_step
+        agent_i_phase = τ_clock.phases[agent_i_index]
+        t_global = gs_state.time_step + agent_i_phase
+    end
+    # Sample outcomes actually happening this step
+    state_i = nothing
+    if !isempty(action_i.target_cells)
+        cell_i = action_i.target_cells[1]  # Assume single cell for now
+        state_i = sample_event_state_from(b_sys, cell_i)
+    end
+    # Sample other agents' observations and apply them immediately
     for j in agents_j
-        if t_global + 1 == next_sync_time(j, gs_state)
-            if haskey(buffer, j.id)
-                for (cell, state) in buffer[j.id]
-                    b_sys = collapse_belief_to(b_sys, cell, state)
-                end
-                buffer[j.id] = Vector{Tuple{Tuple{Int, Int}, EventState}}()
+        if j_senses_at_time(j, t_global, gs_state)
+            cell_j = scheduled_cell(j, t_global, gs_state)
+            if cell_j !== nothing
+                state_j = sample_event_state_from(b_sys, cell_j)
+                # Apply sampled observation immediately (Monte Carlo sampling)
+                b_sys = collapse_belief_to(b_sys, cell_j, state_j)
             end
         end
     end
-    
-    # Predict one step ahead
-    b_sys = evolve_no_obs(b_sys, env)
+    # Collapse belief based on current agent's action
+    if state_i !== nothing && !isempty(action_i.target_cells)
+        b_sys = collapse_belief_to(b_sys, action_i.target_cells[1], state_i)
+    end
+    # Predict one step ahead (use fast vectorized version without cache)
+    evolve_start = time()
+    b_sys = evolve_no_obs_fast(b_sys, env, calculate_uncertainty=false)
+    evolve_time = time() - evolve_start
     τ_clock = advance_clock_vector(τ_clock, [agent_i; agents_j])
-    
-    return (r_step, τ_clock, b_sys)
+    if agent_i_index == 2
+        @infiltrate
+    end
+    return (r_step, τ_clock, b_sys, evolve_time)
 end
 
 """
@@ -228,20 +235,23 @@ Build belief set for PBVI
 function build_belief_set(B_clean::Belief, agent_i::Agent, τ_i::Int, agents_j::Vector{Agent}, 
                          τ_js_vector::Dict{Int, Int}, H::Int, env, gs_state, N_seed::Int)
     𝔅 = Set{BeliefPoint}()
+    total_generated = 0
     
-    for _ in 1:N_seed
+    for seed in 1:N_seed
         (τ, b_sys) = sample_system_state_at_τi(B_clean, agent_i, τ_i, agents_j, τ_js_vector, env, gs_state)
         
         for h in 0:(H-1)
+            total_generated += 1
             push!(𝔅, BeliefPoint(τ, deepcopy(b_sys)))
             
             # Take a random action and simulate
             a_rand = random_pointing(agent_i, τ, env)
-            if a_rand !== nothing
-                (_, τ, b_sys) = simulate_one_step(τ, b_sys, a_rand, agent_i, agents_j, env, gs_state)
-            end
+            (_, τ, b_sys) = simulate_one_step(τ, b_sys, a_rand, agent_i, agents_j, env, gs_state)
         end
     end
+    
+    final_count = length(𝔅)
+    println("📊 Belief set: generated $(total_generated) points, kept $(final_count) unique points (removed $(total_generated - final_count) duplicates)")
     
     return collect(𝔅)
 end
@@ -253,6 +263,22 @@ function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Fl
               agent_i::Agent, env, gs_state)
     VALUE = Dict{BeliefPoint, Float64}()
     POLICY = Dict{BeliefPoint, SensingAction}()
+    # make a Dict from phase-tuple → vector of points in that slice
+    SLICE_BUCKET  = Dict{Tuple{Vararg{Int}}, Vector{BeliefPoint}}()
+    DIGEST_LOOKUP = Dict{Tuple{Vararg{Int}}, Dict{UInt64,BeliefPoint}}()
+
+    for bp in 𝔅
+        key = Tuple(bp.clock.phases)          # hashable
+        push!(get!(SLICE_BUCKET, key, BeliefPoint[]), bp)
+    end
+    for (key, vec) in SLICE_BUCKET
+        lkp = Dict{UInt64,BeliefPoint}()
+        for bp in vec
+            lkp[bp.digest] = bp
+        end
+        DIGEST_LOOKUP[key] = lkp              # digest → bp in that slice
+    end
+
     
     # Initialize values
     for bp in 𝔅
@@ -265,25 +291,25 @@ function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Fl
         Δ = 0.0
         shuffled_𝔅 = shuffle(𝔅)
         sim_times = Float64[]  # Track simulation times for this sweep
+
         
+        # Sequential belief point processing (thread-safe)
         for bp in shuffled_𝔅
             best_Q = -Inf
             best_act = nothing
             
             # Get all feasible actions
             action_set = all_pointings(agent_i, bp.clock, env)
+            
             for a in action_set
                 sum_Q = 0.0
                 
-                for _ in 1:N_particles
-                    # Time the simulate_one_step call
-                    t_start = time()
-                    (r, τ′, b′) = simulate_one_step(copy(bp.clock), deepcopy(bp.belief), a, 
-                                                    agent_i, get_other_agents(agent_i, env), env, gs_state)
-                    t_end = time()
-                    push!(sim_times, t_end - t_start)
+                # Sequential particle simulation
+                for particle in 1:N_particles
+                    (r, τ′, b′, evolve_time) = simulate_one_step(copy(bp.clock), copy(bp.belief), a, 
+                                                    agent_i, get_other_agents(agent_i, env), env, gs_state)                    
                     # Find nearest belief point
-                    nearest_bp = find_nearest_belief(BeliefPoint(τ′, b′), 𝔅)
+                    nearest_bp = find_nearest_belief(BeliefPoint(τ′, b′), SLICE_BUCKET, DIGEST_LOOKUP)
                     v_next = VALUE[nearest_bp]
                     
                     sum_Q += r + γ * v_next
@@ -300,13 +326,10 @@ function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Fl
             Δ = max(Δ, abs(best_Q - VALUE[bp]))
             VALUE[bp] = best_Q
             POLICY[bp] = best_act
-            
         end
         
         println("  Sweep $(sweep): max change = $(round(Δ, digits=4))")
-        if !isempty(sim_times)
-            println("  Sim times: $(round(mean(sim_times) * 1000, digits=2)) ± $(round(std(sim_times) * 1000, digits=2)) ms")
-        end
+
         
         if Δ < ε
             break
@@ -354,9 +377,6 @@ function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::
             push!(candidate_bps, bp)
         end
     end
-    if agent_i.id == 2
-        @infiltrate
-    end
     if isempty(candidate_bps)
         # If no exact match, find the belief point with closest phases
         if !isempty(𝔅)
@@ -384,16 +404,6 @@ function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::
         if haskey(POLICY, current_bp)
             action = POLICY[current_bp]
             push!(sequence, action)
-            
-            # Debug: Print extracted action for Agent 2
-            if agent_i.id == 2
-                println("🔍 Agent 2 Extracted Action:")
-                println("  Action: $(action)")
-                println("  Target cells: $(action.target_cells)")
-                current_pos = get_position_at_time(agent_i.trajectory, (gs_state.time_step + agent_i.phase_offset) % agent_i.trajectory.period)
-                println("  Current position: $(current_pos)")
-                println("  Available cells: $(get_field_of_regard_at_position(agent_i, current_pos, env))")
-            end
             
             # Find the next belief point by simulating forward
             # We need to find a belief point that represents the next state
@@ -496,6 +506,15 @@ function next_sync_time(agent::Agent, gs_state)
 end
 
 """
+Get next sync time for agent at a specific global time
+"""
+function next_sync_time_at_global_time(agent::Agent, t_global::Int)
+    # Simplified: assume sync every C timesteps
+    C = agent.trajectory.period  # This should come from environment or agent parameters
+    return t_global + C
+end
+
+"""
 Advance clock vector
 """
 function advance_clock_vector(τ_clock::ClockVector, agents)
@@ -520,33 +539,23 @@ function random_pointing(agent::Agent, τ_clock::ClockVector, env)
     phase = τ_clock.phases[agent_index]
     pos = get_position_at_time(agent.trajectory, phase)
     
-    # Debug: Print agent position and field of regard
-    if agent.id == 2
-        println("🔍 Agent 2 Debug:")
-        println("  Phase: $(phase)")
-        println("  Position: $(pos)")
-        println("  Trajectory: $(typeof(agent.trajectory))")
-        println("  Sensor pattern: $(agent.sensor.pattern)")
-        println("  Sensor range: $(agent.sensor.range)")
-        println("  Environment width: $(env.width), height: $(env.height)")
-    end
-    
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     
-    if agent.id == 2
-        println("  Available cells: $(available_cells)")
-        println("  Clock phases: $(τ_clock.phases)")
-        println("  Agent index: $(agent_index)")
+    # Create action set: wait action + pointing actions
+    actions = SensingAction[]
+    push!(actions, SensingAction(agent.id, Tuple{Int, Int}[], false))  # Wait action
+    
+    # Add pointing actions for available cells
+    for cell in available_cells
+        action = SensingAction(agent.id, [cell], false)
+        if check_battery_feasible(agent, action, agent.battery_level)
+            push!(actions, action)
+        end
     end
     
-    if isempty(available_cells)
-        return SensingAction(agent.id, Tuple{Int, Int}[], false)
-    end
-    
-    # Pick random cell
-    cell = rand(available_cells)
-    return SensingAction(agent.id, [cell], false)
+    # Pick random action (including wait)
+    return rand(actions)
 end
 
 """
@@ -562,12 +571,6 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
     end
     phase = τ_clock.phases[agent_index]
     pos = get_position_at_time(agent.trajectory, phase)
-    if agent.id == 2
-        println("🔍 Agent 2 all_pointings:")
-        println("  Phase: $(phase)")
-        println("  Position: $(pos)")
-        println("  Available cells: $(get_field_of_regard_at_position(agent, pos, env))")
-    end
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     
@@ -585,48 +588,77 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
     return actions
 end
 
-"""
-Find nearest belief point
-"""
-function find_nearest_belief(target_bp::BeliefPoint, belief_points::Vector{BeliefPoint})
-    if isempty(belief_points)
-        return target_bp
+@inline function find_nearest_belief(target::BeliefPoint, SLICE_BUCKET, DIGEST_LOOKUP)
+    key = Tuple(target.clock.phases)
+
+    # 1. bucket for the correct slice
+    bucket = get(SLICE_BUCKET, key, nothing)
+    if bucket === nothing
+        return target            # should not happen if 𝔅 covered all slices
     end
-    
-    min_distance = Inf
-    nearest_bp = belief_points[1]
-    
-    for bp in belief_points
-        # Simple distance metric based on belief difference
-        distance = belief_distance(target_bp.belief, bp.belief)
-        
-        if distance < min_distance
-            min_distance = distance
-            nearest_bp = bp
+
+    # 2. exact digest match (O(1))
+    fp = get(DIGEST_LOOKUP[key], target.digest, nothing)
+    if fp !== nothing
+        return fp
+    end
+
+    # 3. fall-back: cheapest distance inside the bucket
+    nearest   = bucket[1]
+    best_dist = belief_distance(target.belief, nearest.belief)
+    @inbounds for bp in bucket
+        d = belief_distance(target.belief, bp.belief)
+        if d < best_dist
+            best_dist = d
+            nearest   = bp
         end
     end
+    return nearest
+end
+
+
+"""
+Calculate distance between two beliefs using low-dimensional summary
+"""
+function belief_distance(b1::Belief, b2::Belief)
+    # Use digest for fast comparison first
+    digest1 = hash(b1.event_distributions, UInt(0))
+    digest2 = hash(b2.event_distributions, UInt(0))
     
-    return nearest_bp
+    if digest1 == digest2
+        return 0.0  # Exact match
+    end
+    
+    # Fallback to L1 distance on low-dimensional summary
+    # Create summary: vector of per-cell event probabilities
+    summary1 = belief_summary(b1)
+    summary2 = belief_summary(b2)
+    
+    return sum(abs.(summary1 .- summary2))
 end
 
 """
-Calculate distance between two beliefs
+Create low-dimensional summary of belief for distance calculation
 """
-function belief_distance(b1::Belief, b2::Belief)
-    # Simple L1 distance between belief distributions
-    total_distance = 0.0
-    
+function belief_summary(belief::Belief)
     # Get dimensions from event_distributions array [state, y, x]
-    num_states, height, width = size(b1.event_distributions)
+    num_states, height, width = size(belief.event_distributions)
+    
+    # Create summary: vector of event probabilities for each cell
+    summary = Float64[]
     
     for x in 1:width, y in 1:height
+        # Get event probability for this cell (sum over event states)
+        event_prob = 0.0
         for state in 1:num_states
-            diff = abs(b1.event_distributions[state, y, x] - b2.event_distributions[state, y, x])
-            total_distance += diff
+            if state == 2  # Assuming state 2 is EVENT_PRESENT
+                event_prob += belief.event_distributions[state, y, x]
+            end
         end
+        push!(summary, event_prob)
     end
     
-    return total_distance
+    return summary
 end
 
 """

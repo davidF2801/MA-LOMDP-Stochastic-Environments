@@ -29,7 +29,7 @@ println("📊 Starting postprocessing analysis...")
 # =============================================================================
 
 # Specific results directory to analyze
-TARGET_RUN = "run_2025-07-29T13-22-23-305"
+TARGET_RUN = "run_2025-07-30T15-16-00-337"
 RESULTS_DIR = joinpath("..", "results", TARGET_RUN)
 OUTPUT_DIR = RESULTS_DIR  # Save results in the same folder we're reading from
 
@@ -38,8 +38,8 @@ METRICS = [:event_observation_percentage, :ndd_life, :final_uncertainty]
 
 # Planning modes to compare
 #PLANNING_MODES = [:sweep, :script, :random]
-PLANNING_MODES = [:script,:prior_based, :macro_approx_099, :macro_approx_095, :macro_approx_090, :sweep]
-
+#PLANNING_MODES = [:script,:prior_based, :macro_approx_099, :macro_approx_095, :macro_approx_090, :sweep]
+PLANNING_MODES = [:prior_based, :macro_approx_090, :macro_approx_09999999, :script, :sweep]
 
 # =============================================================================
 # DATA EXTRACTION FUNCTIONS

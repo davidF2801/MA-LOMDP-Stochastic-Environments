@@ -534,9 +534,7 @@ function compute_expected_reward(belief_branches, action, c_obs)
             H_before = calculate_cell_entropy(B_cur, cell)
             H_after = 0.0
             info_gain = H_before - H_after
-            @infiltrate
-            weighted_gain = info_gain*get_event_probability(B_cur, cell)
-
+            weighted_gain = info_gain
             expected_reward += p_branch * weighted_gain
         end
         

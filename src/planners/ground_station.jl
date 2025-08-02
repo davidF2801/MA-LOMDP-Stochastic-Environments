@@ -17,6 +17,7 @@ include("macro_planner_sweep.jl")
 include("macro_planner_greedy.jl")
 include("macro_planner_prior_based.jl")
 include("macro_planner_pbvi.jl")
+include("macro_planner_pbvi_policy_tree.jl")
 
 using .MacroPlannerAsync
 using .MacroPlannerAsyncApprox
@@ -26,6 +27,7 @@ using .MacroPlannerSweep
 using .MacroPlannerGreedy
 using .MacroPlannerPriorBased
 using .MacroPlannerPBVI
+using .AsyncPBVIPolicyTree
 
 # Import Agent type from TrajectoryPlanner
 include("../agents/trajectory_planner.jl")
@@ -200,17 +202,27 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 gs_state.total_planning_time += planning_time
                 gs_state.num_plans_computed += 1
                 println("⏱️  Agent $(agent_id) PBVI planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :pbvi_policy_tree
+                println("🌳 Computing PBVI policy tree for agent $(agent_id)")
+                reactive_policy, planning_time = AsyncPBVIPolicyTree.best_policy_tree(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :pbvi_policy_tree
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) PBVI policy tree planning time: $(round(planning_time, digits=3)) seconds")
             else
                 error("Unknown planning mode: $(planning_mode)")
             end
             
             # Store plan in ground station state (for non-policy modes)
-            if planning_mode != :policy
+            if planning_mode != :policy && planning_mode != :pbvi_policy_tree
                 gs_state.agent_plans[agent_id] = new_plan
                 # Reset agent's plan index for the new plan
                 agent.plan_index = 1
             else
-                # For policy mode, the reactive policy is already stored in the agent
+                # For policy modes, the reactive policy is already stored in the agent
                 # No need to store anything in gs_state.agent_plans
                 # Reset agent's plan index (though not used for policies)
                 agent.plan_index = 1

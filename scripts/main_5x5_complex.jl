@@ -28,7 +28,8 @@ using Infiltrator
 # 🎯 MAIN SIMULATION PARAMETERS
 const NUM_STEPS = 20             # Total simulation steps
 const PLANNING_MODE = :sweep         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based)
-const modes = [:pbvi]
+#const modes = [:pbvi, :prior_based, :random]
+const modes = [:pbvi_policy_tree, :prior_based, :random]
 const N_RUNS = 1
 const MAX_BATTERY = 10000.0
 const CHARGING_RATE = 3.0
@@ -68,6 +69,7 @@ using .MyProject: EventDynamics, SpatialGrid
 
 # Import functions
 using .MyProject.Agents.TrajectoryPlanner: get_position_at_time, execute_plan, create_complex_trajectory
+using .MyProject.Types: save_agent_actions_to_csv, calculate_and_save_ndd_metrics, EnhancedEventTracker, initialize_enhanced_event_tracker, update_enhanced_event_tracking!, mark_observed_events_with_time!, get_event_statistics, save_event_tracking_data, save_uncertainty_evolution_data, save_sync_event_data, create_observation_heatmap
 
 # Import specific modules
 using .Environment
@@ -97,15 +99,6 @@ mutable struct ReplayEnvironment
     env::SpatialGrid
     event_evolution::Vector{Matrix{EventState}}
     rng_state::Vector{Int}  # Store RNG state for reproducibility
-end
-
-"""
-Enhanced event tracking that also tracks detection times
-"""
-mutable struct EnhancedEventTracker
-    cell_active_event_id::Dict{Tuple{Int,Int}, Union{Nothing,Int}}
-    event_registry::Dict{Int, Dict}
-    next_event_id::Int
 end
 
 println("✅ All modules imported successfully")
@@ -442,134 +435,7 @@ end
 # EVENT TRACKING STRUCTURES
 # =============================================================================
 
-"""
-Enhanced event tracking that also tracks detection times
-"""
-mutable struct EnhancedEventTracker
-    cell_active_event_id::Dict{Tuple{Int,Int}, Union{Nothing,Int}}
-    event_registry::Dict{Int, Dict}
-    next_event_id::Int
-end
 
-"""
-Initialize enhanced event tracker
-"""
-function initialize_enhanced_event_tracker()
-    return EnhancedEventTracker(
-        Dict{Tuple{Int,Int}, Union{Nothing,Int}}(),
-        Dict{Int, Dict}(),
-        1
-    )
-end
-
-"""
-Update enhanced event tracking for a timestep
-"""
-function update_enhanced_event_tracking!(tracker::EnhancedEventTracker, prev_environment::Matrix{EventState}, 
-                                        curr_environment::Matrix{EventState}, timestep::Int)
-    height, width = size(curr_environment)
-    
-    for y in 1:height, x in 1:width
-        cell = (x, y)
-        prev_state = prev_environment[y, x]
-        curr_state = curr_environment[y, x]
-        
-        if prev_state == NO_EVENT && curr_state == EVENT_PRESENT
-            # New event started
-            event_id = tracker.next_event_id
-            tracker.cell_active_event_id[cell] = event_id
-            tracker.event_registry[event_id] = Dict(
-                :cell => cell,
-                :start_time => timestep,
-                :observed => false,
-                :detection_time => nothing,  # Track when event was first detected
-                :end_time => nothing
-            )
-            tracker.next_event_id += 1
-            
-        elseif prev_state == EVENT_PRESENT && curr_state == NO_EVENT
-            # Event ended
-            event_id = tracker.cell_active_event_id[cell]
-            if event_id !== nothing
-                tracker.event_registry[event_id][:end_time] = timestep
-                tracker.cell_active_event_id[cell] = nothing
-            end
-        end
-    end
-end
-
-"""
-Mark events as observed with detection time tracking
-"""
-function mark_observed_events_with_time!(tracker::EnhancedEventTracker, agent_observations::Vector{Tuple{Int, Vector{Tuple{Tuple{Int,Int}, EventState}}}}, current_timestep::Int)
-    for (agent_id, observations) in agent_observations
-        for (cell, observed_state) in observations
-            if observed_state == EVENT_PRESENT
-                event_id = tracker.cell_active_event_id[cell]
-                if event_id !== nothing
-                    event_info = tracker.event_registry[event_id]
-                    if !event_info[:observed]
-                        # First time this event is observed
-                        event_info[:observed] = true
-                        event_info[:detection_time] = current_timestep
-                    end
-                end
-            end
-        end
-    end
-end
-
-"""
-Get event statistics from enhanced tracker
-"""
-function get_event_statistics(tracker::EnhancedEventTracker)
-    total_events = length(tracker.event_registry)
-    observed_events = count(e -> e[:observed], collect(values(tracker.event_registry)))
-    return total_events, observed_events
-end
-
-"""
-Calculate Normalized Detection Delay (lifetime-normalized) for enhanced tracker
-"""
-function calculate_normalized_detection_delay_lifetime(event_tracker::EnhancedEventTracker, env)
-    detected_events = filter(e -> e[:observed], collect(values(event_tracker.event_registry)))
-    
-    if isempty(detected_events)
-        return 0.0  # No detected events
-    end
-    
-    total_ndd = 0.0
-    
-    for event in detected_events
-        # Calculate detection delay
-        t_start = event[:start_time]
-        t_detect = event[:detection_time]  # We need to track this
-        
-        # Get the cell where this event occurred
-        cell = event[:cell]
-        x, y = cell
-        
-        # Get cell-specific parameters for this event
-        cell_params = Types.get_cell_rsp_params(env.rsp_params, y, x)
-        
-        # Calculate expected lifetime E[L_e] for RSP events using cell-specific parameters
-        # For RSP, E[L] = 1/μ where μ is the death probability
-        # μ = 1 - δ for the specific cell
-        cell_mu = 1.0 - cell_params.delta
-        expected_lifetime = 1.0 / cell_mu
-        
-        # Calculate normalized delay for this event
-        detection_delay = t_detect - t_start
-        normalized_delay = detection_delay / expected_lifetime
-        
-        total_ndd += normalized_delay
-    end
-    
-    # Average over all detected events
-    ndd_life = total_ndd / length(detected_events)
-    
-    return ndd_life
-end
 
 # =============================================================================
 # METRIC SAVING FUNCTIONS
@@ -578,7 +444,7 @@ end
 """
 Save planning time statistics and performance metrics to a file
 """
-function save_performance_metrics(gs_state, avg_uncertainty, event_observation_percentage, ndd_life, env, agents, results_dir, run_number, planning_mode)
+function save_performance_metrics(gs_state, avg_uncertainty, event_observation_percentage, ndd_expected_lifetime, ndd_actual_lifetime, env, agents, results_dir, run_number, planning_mode)
     # Create the metrics directory path
     metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
     if !isdir(metrics_dir)
@@ -660,7 +526,8 @@ function save_performance_metrics(gs_state, avg_uncertainty, event_observation_p
         println(file, "PERFORMANCE METRICS:")
         println(file, "  Final event observation percentage: $(round(event_observation_percentage, digits=1))%")
         println(file, "  Final average uncertainty: $(round(avg_uncertainty[end], digits=3))")
-        println(file, "  Normalized Detection Delay (lifetime): $(round(ndd_life, digits=3))")
+        println(file, "  Normalized Detection Delay (expected lifetime): $(round(ndd_expected_lifetime, digits=3))")
+        println(file, "  Normalized Detection Delay (actual lifetime): $(round(ndd_actual_lifetime, digits=3))")
         println(file, "")
         
         # Uncertainty evolution
@@ -689,107 +556,6 @@ function save_performance_metrics(gs_state, avg_uncertainty, event_observation_p
     end
     
     println("📁 Performance metrics saved to: $(filepath)")
-    return filepath
-end
-
-"""
-Save detailed event tracking data to CSV
-"""
-function save_event_tracking_data(event_tracker::EnhancedEventTracker, results_dir, run_number, planning_mode)
-    # Create the metrics directory path
-    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
-    if !isdir(metrics_dir)
-        mkpath(metrics_dir)
-    end
-    
-    filename = "event_tracking_$(planning_mode)_run$(run_number).csv"
-    filepath = joinpath(metrics_dir, filename)
-    
-    # Prepare data for CSV
-    rows = []
-    for (event_id, event_info) in event_tracker.event_registry
-        row = Dict(
-            :event_id => event_id,
-            :cell_x => event_info[:cell][1],
-            :cell_y => event_info[:cell][2],
-            :start_time => event_info[:start_time],
-            :end_time => event_info[:end_time] !== nothing ? event_info[:end_time] : -1,
-            :observed => event_info[:observed],
-            :detection_time => event_info[:detection_time] !== nothing ? event_info[:detection_time] : -1,
-            :lifetime => event_info[:end_time] !== nothing ? event_info[:end_time] - event_info[:start_time] : -1,
-            :detection_delay => event_info[:observed] && event_info[:detection_time] !== nothing ? 
-                               event_info[:detection_time] - event_info[:start_time] : -1
-        )
-        push!(rows, row)
-    end
-    
-    # Create DataFrame and save
-    df = DataFrame(rows)
-    CSV.write(filepath, df)
-    
-    println("📁 Event tracking data saved to: $(filepath)")
-    return filepath
-end
-
-"""
-Save uncertainty evolution data to CSV
-"""
-function save_uncertainty_evolution_data(uncertainty_evolution, avg_uncertainty, results_dir, run_number, planning_mode)
-    # Create the metrics directory path
-    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
-    if !isdir(metrics_dir)
-        mkpath(metrics_dir)
-    end
-    
-    filename = "uncertainty_evolution_$(planning_mode)_run$(run_number).csv"
-    filepath = joinpath(metrics_dir, filename)
-    
-    # Prepare data for CSV
-    rows = []
-    for (timestep, avg_unc) in enumerate(avg_uncertainty)
-        row = Dict(
-            :timestep => timestep - 1,  # Convert to 0-based indexing
-            :average_uncertainty => avg_unc
-        )
-        push!(rows, row)
-    end
-    
-    # Create DataFrame and save
-    df = DataFrame(rows)
-    CSV.write(filepath, df)
-    
-    println("📁 Uncertainty evolution data saved to: $(filepath)")
-    return filepath
-end
-
-"""
-Save sync event data to CSV
-"""
-function save_sync_event_data(sync_events, results_dir, run_number, planning_mode)
-    # Create the metrics directory path
-    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
-    if !isdir(metrics_dir)
-        mkpath(metrics_dir)
-    end
-    
-    filename = "sync_events_$(planning_mode)_run$(run_number).csv"
-    filepath = joinpath(metrics_dir, filename)
-    
-    # Prepare data for CSV
-    rows = []
-    for (timestep, agent_id) in sync_events
-        row = Dict(
-            :timestep => timestep,
-            :agent_id => agent_id
-        )
-        push!(rows, row)
-    end
-    
-    # Create DataFrame and save
-    df = DataFrame(rows)
-    CSV.write(filepath, df)
-    
-    println("📁 Sync event data saved to: $(filepath)")
     return filepath
 end
 
@@ -1032,7 +798,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     event_observation_percentage = total_events > 0 ? (observed_events / total_events) * 100.0 : 0.0
     
     # Calculate Normalized Detection Delay (lifetime-normalized)
-    ndd_life = calculate_normalized_detection_delay_lifetime(event_tracker, env)
+    ndd_life = Types.calculate_ndd_expected_lifetime(event_tracker, env, NUM_STEPS)
     
     # Print final results
     println("\n📈 RSP Simulation Results (Replay)")
@@ -1130,17 +896,30 @@ for n in 1:N_RUNS
         println("\n📊 Saving Performance Metrics...")
         println("===============================")
         
+        # Calculate both NDD metrics for performance report
+        ndd_expected_lifetime = Types.calculate_ndd_expected_lifetime(event_tracker, replay_env.env, NUM_STEPS)
+        ndd_actual_lifetime = Types.calculate_ndd_actual_lifetime(event_tracker, NUM_STEPS)
+        
         # Save main performance metrics
-        save_performance_metrics(gs_state, avg_uncertainty, percentage, ndd_life, replay_env.env, agents, results_base_dir, n, PLANNING_MODE)
+        save_performance_metrics(gs_state, avg_uncertainty, percentage, ndd_expected_lifetime, ndd_actual_lifetime, replay_env.env, agents, results_base_dir, n, PLANNING_MODE)
+        
+        # Save agent actions to CSV
+        Types.save_agent_actions_to_csv(action_history, results_base_dir, n, PLANNING_MODE, NUM_STEPS)
+        
+        # Calculate and save NDD metrics with both expected and actual lifetimes
+        ndd_expected, ndd_actual, ndd_filepath = Types.calculate_and_save_ndd_metrics(event_tracker, replay_env.env, NUM_STEPS, results_base_dir, n, PLANNING_MODE)
         
         # Save detailed event tracking data
-        save_event_tracking_data(event_tracker, results_base_dir, n, PLANNING_MODE)
+        Types.save_event_tracking_data(event_tracker, results_base_dir, n, PLANNING_MODE)
         
         # Save uncertainty evolution data
-        save_uncertainty_evolution_data(uncertainty_evolution, avg_uncertainty, results_base_dir, n, PLANNING_MODE)
+        Types.save_uncertainty_evolution_data(uncertainty_evolution, avg_uncertainty, results_base_dir, n, PLANNING_MODE)
         
         # Save sync event data
-        save_sync_event_data(sync_events, results_base_dir, n, PLANNING_MODE)
+        Types.save_sync_event_data(sync_events, results_base_dir, n, PLANNING_MODE)
+        
+        # Create and save observation heatmap
+        Types.create_observation_heatmap(action_history, GRID_WIDTH, GRID_HEIGHT, results_base_dir, n, PLANNING_MODE)
         
         # Create visualizations
         println("\n🎨 Creating Visualizations...")
@@ -1152,7 +931,7 @@ for n in 1:N_RUNS
         println("\n✅ RSP simulation completed!")
         println("📁 Check the results folder for:")
         println("  - Run $(n)/$(PLANNING_MODE)/animations/ (main simulation animation)")
-        println("  - Run $(n)/$(PLANNING_MODE)/metrics/ (performance metrics and data)")
+        println("  - Run $(n)/$(PLANNING_MODE)/metrics/ (performance metrics, agent actions, NDD metrics)")
         println("  - Run $(n)/environment/ (environment parameter distribution)")
     end
 end

@@ -237,7 +237,7 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
         # No plan available, use default wait action
         return SensingAction(agent_id, Tuple{Int, Int}[], false)
     end
-    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx || plan_type == :macro_approx_099 || plan_type == :macro_approx_095 || plan_type == :macro_approx_090 || plan_type == :prior_based || plan_type == :pbvi
+    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx || plan_type == :macro_approx_099 || plan_type == :macro_approx_095 || plan_type == :macro_approx_090 || plan_type == :prior_based || plan_type == :pbvi || plan_type == :pbvi_policy_tree
         # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, greedy sequence, macro-approximate sequence, or prior-based sequence
         if !isempty(plan)
             # Get the action at the current plan index
@@ -266,11 +266,15 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
             return SensingAction(agent_id, Tuple{Int, Int}[], false)
         end
         
-    elseif plan_type == :policy
+    elseif plan_type == :policy || plan_type == :pbvi_policy_tree
         # Execute reactive policy (closed-loop)
+        @infiltrate
         if agent.reactive_policy !== nothing
             # Use the reactive policy function directly
-            planned_action = agent.reactive_policy(local_obs_history)
+            @infiltrate
+            # Pass the current time to the reactive policy
+            planned_action = agent.reactive_policy(local_obs_history, gs_state.time_step)
+            @infiltrate
         else
             # Fallback to old policy tree method (only if plan is not nothing)
             if plan !== nothing
@@ -279,7 +283,6 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
                 planned_action = nothing
             end
         end
-        @infiltrate
         
         if planned_action === nothing
             # No policy found, use wait action
