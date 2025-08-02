@@ -1,0 +1,21 @@
+# Julia Package Dependencies
+# Equivalent to Python requirements.txt
+# Install with: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+
+# Core dependencies
+POMDPs>=0.9
+POMDPTools>=0.1.0
+DataFrames
+CSV
+Dates
+Random
+LinearAlgebra
+Statistics
+
+# Additional dependencies
+Distributions>=0.25
+Glob
+JSON
+
+# Julia version requirement
+# julia>=1.6 
