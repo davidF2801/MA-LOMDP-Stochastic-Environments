@@ -79,7 +79,7 @@ best_policy_tree(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_st
   – Return a reactive policy function
 """
 function best_policy_tree(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=2, N_particles::Int=64, N_sweeps::Int=50, ε::Float64=0.1)
+                    N_seed::Int=120, N_particles::Int=64, N_sweeps::Int=5, ε::Float64=0.1)
     # Start timing
     start_time = time()
     
@@ -678,7 +678,7 @@ function random_pointing(agent::Agent, τ_clock::ClockVector, env)
         return SensingAction(agent.id, Tuple{Int, Int}[], false)
     end
     phase = τ_clock.phases[agent_index]
-    pos = get_position_at_time(agent.trajectory, phase)
+    pos = get_position_at_time(agent.trajectory, phase, agent.phase_offset)
     
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
@@ -711,7 +711,7 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
         return [SensingAction(agent.id, Tuple{Int, Int}[], false)]
     end
     phase = τ_clock.phases[agent_index]
-    pos = get_position_at_time(agent.trajectory, phase)
+    pos = get_position_at_time(agent.trajectory, phase, agent.phase_offset)
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     

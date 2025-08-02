@@ -29,7 +29,7 @@ using Infiltrator
 const NUM_STEPS = 20             # Total simulation steps
 const PLANNING_MODE = :sweep         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based)
 #const modes = [:pbvi, :prior_based, :random]
-const modes = [:pbvi_policy_tree, :prior_based, :random]
+const modes = [:pbvi, :prior_based, :random]
 const N_RUNS = 1
 const MAX_BATTERY = 10000.0
 const CHARGING_RATE = 3.0

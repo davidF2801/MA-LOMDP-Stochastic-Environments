@@ -49,7 +49,7 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     clear_belief_evolution_cache!()
     
     # Enumerate all possible action sequences of length C considering trajectory
-    action_sequences = generate_action_sequences(agent, env, C)
+    action_sequences = generate_action_sequences(agent, env, C, agent.phase_offset)
 
     if isempty(action_sequences)
         end_time = time()

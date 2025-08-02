@@ -24,11 +24,11 @@ using Infiltrator
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 10            # Total simulation steps
+const NUM_STEPS = 200            # Total simulation steps
 const PLANNING_MODE = :policy         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based, :pbvi)
-const modes = [:sweep, :prior_based, :random, :script, :macro_approx_095, :macro_approx_090, :macro_approx_085]
+const modes = [:greedy, :sweep, :prior_based, :random, :script, :macro_approx_095, :macro_approx_090, :macro_approx_085]
 #const modes = [:prior_based]
-const N_RUNS = 1
+const N_RUNS = 200
 const MAX_BATTERY = 10000.0
 const CHARGING_RATE = 3.0
 const OBSERVATION_COST = 0.0

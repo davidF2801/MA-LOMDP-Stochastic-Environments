@@ -196,7 +196,9 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("🧠 Computing PBVI plan for agent $(agent_id)")
                 new_plan, planning_time = MacroPlannerPBVI.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :pbvi
-                
+                if agent.id == 2
+                    @infiltrate
+                end
                 # Track planning time
                 push!(gs_state.planning_times[agent_id], planning_time)
                 gs_state.total_planning_time += planning_time

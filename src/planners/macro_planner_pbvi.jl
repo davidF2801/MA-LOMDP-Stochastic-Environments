@@ -75,7 +75,7 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state):
   – Return the best sequence
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=10, N_particles::Int=64, N_sweeps::Int=50, ε::Float64=0.1)
+                    N_seed::Int=10, N_particles::Int=64, N_sweeps::Int=5, ε::Float64=0.1)
     # Start timing
     start_time = time()
     
@@ -186,9 +186,9 @@ function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::Sensi
 
     # Calculate global time from agent_i's phase in the clock vector
     agent_i_index = find_agent_index(agent_i, env)
-    if agent_i_index == 2
-        @infiltrate
-    end
+    # if agent_i_index == 2
+    #     @infiltrate
+    # end
     if agent_i_index === nothing
         t_global = gs_state.time_step  # Fallback
     else
@@ -223,9 +223,9 @@ function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::Sensi
     b_sys = evolve_no_obs_fast(b_sys, env, calculate_uncertainty=false)
     evolve_time = time() - evolve_start
     τ_clock = advance_clock_vector(τ_clock, [agent_i; agents_j])
-    if agent_i_index == 2
-        @infiltrate
-    end
+    # if agent_i_index == 2
+    #     @infiltrate
+    # end
     return (r_step, τ_clock, b_sys, evolve_time)
 end
 
@@ -364,12 +364,14 @@ function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::
             push!(current_phases, 0)
         else
             # Other agents: relative phase offset
-            relative_offset = (agent.phase_offset - agent_i.phase_offset) % agent.trajectory.period
+            relative_offset = mod((agent.phase_offset - agent_i.phase_offset), agent.trajectory.period)
             push!(current_phases, relative_offset)
         end
     end
     current_clock = ClockVector(current_phases)
-    
+    if agent_i.id == 2
+        @infiltrate
+    end
     candidate_bps = BeliefPoint[]
     
     for bp in 𝔅
@@ -541,7 +543,9 @@ function random_pointing(agent::Agent, τ_clock::ClockVector, env)
     
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
-    
+    # if agent.id == 2
+    #     @infiltrate
+    # end
     # Create action set: wait action + pointing actions
     actions = SensingAction[]
     push!(actions, SensingAction(agent.id, Tuple{Int, Int}[], false))  # Wait action
@@ -573,7 +577,9 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
     pos = get_position_at_time(agent.trajectory, phase)
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
-    
+    # if agent.id == 2
+    #     @infiltrate
+    # end
     # Add wait action
     push!(actions, SensingAction(agent.id, Tuple{Int, Int}[], false))
     
