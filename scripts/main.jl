@@ -26,7 +26,7 @@ using Infiltrator
 # 🎯 MAIN SIMULATION PARAMETERS
 const NUM_STEPS = 200            # Total simulation steps
 const PLANNING_MODE = :policy         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based, :pbvi)
-const modes = [:greedy, :sweep, :prior_based, :random, :script, :macro_approx_095, :macro_approx_090, :macro_approx_085]
+const modes = [:sweep, :prior_based, :random, :script, :macro_approx_095, :macro_approx_090, :macro_approx_085]
 #const modes = [:prior_based]
 const N_RUNS = 200
 const MAX_BATTERY = 10000.0
@@ -879,7 +879,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
         for agent in agents
             # Get plan from ground station and execute it
             plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
-            action = execute_plan(agent, plan, plan_type, agent.observation_history)
+            action = execute_plan(agent, plan, plan_type, agent.observation_history, t)
             push!(joint_actions, action)
             
             # Ensure every agent charges every timestep (this is the key fix!)

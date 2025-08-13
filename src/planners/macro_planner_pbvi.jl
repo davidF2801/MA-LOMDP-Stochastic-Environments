@@ -75,7 +75,7 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state):
   – Return the best sequence
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=10, N_particles::Int=64, N_sweeps::Int=5, ε::Float64=0.1)
+                    N_seed::Int=50, N_particles::Int=32, N_sweeps::Int=50, ε::Float64=0.1)
     # Start timing
     start_time = time()
     
@@ -93,12 +93,11 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     println("🔄 Building belief set for PBVI...")
     # Build belief set
     𝔅 = build_belief_set(B_clean, agent_i, τ_i, agents_j, τ_js_vector, H, env, gs_state, N_seed)
-    @infiltrate
     println("🔄 Running PBVI with $(length(𝔅)) belief points...")
     # Run PBVI
     VALUE, POLICY = pbvi(𝔅, N_particles, N_sweeps, ε, agent_i, env, gs_state)
-    @infiltrate
     # Extract best sequence from policy
+    @infiltrate
     best_sequence = extract_best_sequence(POLICY, VALUE, 𝔅, agent_i, env, gs_state, H)
     @infiltrate
     # End timing
@@ -339,107 +338,69 @@ function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Fl
     return VALUE, POLICY
 end
 
-"""
-Extract best sequence from policy using belief points from PBVI
-"""
-function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::Dict{BeliefPoint, Float64}, 
-                             𝔅::Vector{BeliefPoint}, agent_i::Agent, env, gs_state, H::Int)
+function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction},
+    VALUE::Dict{BeliefPoint, Float64},
+    𝔅::Vector{BeliefPoint},
+    agent_i::Agent, env, gs_state, H::Int)
+
     sequence = SensingAction[]
-    
-    # Find the belief point that best represents the current state
-    # Look for belief points with clock phases matching current agent phases
-    # Calculate phases relative to agent_i (which is at phase 0)
-    current_phases = Int[]
-    
-    # Get all agents in the same order as the clock vector
+
+    # Compute current clock phases relative to agent_i
     all_agents = [env.agents[j] for j in sort(collect(keys(env.agents)))]
-    
-    # Find agent_i's index in the clock vector
     agent_i_index = find_agent_index(agent_i, env)
-    
-    # Calculate phases for all agents relative to agent_i
-    for (i, agent) in enumerate(all_agents)
-        if i == agent_i_index
-            # Agent_i is at phase 0
-            push!(current_phases, 0)
-        else
-            # Other agents: relative phase offset
-            relative_offset = mod((agent.phase_offset - agent_i.phase_offset), agent.trajectory.period)
-            push!(current_phases, relative_offset)
-        end
-    end
+    current_phases = [i == agent_i_index ? 0 :
+                      mod((agent.phase_offset - agent_i.phase_offset), agent.trajectory.period)
+                      for (i, agent) in enumerate(all_agents)]
     current_clock = ClockVector(current_phases)
-    if agent_i.id == 2
-        @infiltrate
-    end
-    candidate_bps = BeliefPoint[]
-    
-    for bp in 𝔅
-        if bp.clock.phases == current_clock.phases
-            push!(candidate_bps, bp)
-        end
-    end
+
+    # Find matching beliefs for current clock
+    candidate_bps = [bp for bp in 𝔅 if bp.clock.phases == current_clock.phases]
     if isempty(candidate_bps)
-        # If no exact match, find the belief point with closest phases
-        if !isempty(𝔅)
-            # Sort by phase difference and take the closest
-            sort!(𝔅, by=bp -> sum(abs.(bp.clock.phases .- current_clock.phases)))
-            current_bp = 𝔅[1]
-        else
-            # Fallback: return empty sequence
-            return SensingAction[]
-        end
-    else
-        # Take the belief point with highest value among candidates
-        best_value = -Inf
-        current_bp = candidate_bps[1]
-        for bp in candidate_bps
-            if haskey(VALUE, bp) && VALUE[bp] > best_value
-                best_value = VALUE[bp]
-                current_bp = bp
-            end
-        end
+        sort!(𝔅, by=bp -> sum(abs.(bp.clock.phases .- current_clock.phases)))
+        candidate_bps = [𝔅[1]]
     end
-    
-    # Extract sequence by following the policy
+
+    current_candidates = candidate_bps
+
+    # Iterate horizon steps
     for h in 1:H
-        if haskey(POLICY, current_bp)
-            action = POLICY[current_bp]
-            push!(sequence, action)
-            
-            # Find the next belief point by simulating forward
-            # We need to find a belief point that represents the next state
-            next_phases = Int[]
-            for (i, agent) in enumerate([agent_i; get_other_agents(agent_i, env)])
-                next_phase = (current_bp.clock.phases[i] + 1) % agent.trajectory.period
-                push!(next_phases, next_phase)
+        action_scores = Dict{SensingAction, Vector{Float64}}()
+
+        # For each candidate belief at this clock, get policy action and value
+        for bp in current_candidates
+            if haskey(POLICY, bp)
+                act = POLICY[bp]
+                push!(get!(action_scores, act, Float64[]), VALUE[bp])
             end
-            next_clock = ClockVector(next_phases)
-            next_candidates = BeliefPoint[]
-            
-            for bp in 𝔅
-                if bp.clock.phases == next_clock.phases
-                    push!(next_candidates, bp)
-                end
-            end
-            
-            if !isempty(next_candidates)
-                # Find the closest belief point to the simulated next state
-                # For simplicity, just take the first one
-                current_bp = next_candidates[1]
-            else
-                # If no next belief point found, break
-                break
-            end
-        else
-            # Fallback to wait action
-            push!(sequence, SensingAction(agent_i.id, Tuple{Int, Int}[], false))
+        end
+
+        if isempty(action_scores)
+            push!(sequence, SensingAction(agent_i.id, Tuple{Int,Int}[], false))
             break
         end
+
+        # Compute average value per action
+        avg_scores = Dict(act => mean(vals) for (act, vals) in action_scores)
+        best_action = argmax(avg_scores)  # action with highest avg value
+        push!(sequence, best_action)
+
+        # Advance to next clock & get next candidate beliefs
+        next_phases = [(current_clock.phases[i] + 1) % all_agents[i].trajectory.period
+                       for i in 1:length(all_agents)]
+        next_clock = ClockVector(next_phases)
+        current_candidates = [bp for bp in 𝔅 if bp.clock.phases == next_clock.phases]
+
+        if isempty(current_candidates)
+            break
+        end
+        current_clock = next_clock
     end
-    
+
     return sequence
 end
+
+
+
 
 # Helper functions
 

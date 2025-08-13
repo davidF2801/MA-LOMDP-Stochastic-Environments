@@ -226,18 +226,18 @@ function observations_match(tree_obs::Vector{Tuple{Tuple{Int, Int}, EventState}}
 end
 
 """
-execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation})
+execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation}, current_time::Int)
 Execute agent's current plan and return the next action to take with battery constraints
 Note: Charging happens in the main simulation loop, not here
 """
-function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation})
+function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation}, current_time::Int)
     agent_id = agent.id
     
-    if plan === nothing && plan_type != :policy
+    if plan === nothing && plan_type != :policy && plan_type != :pbvi_policy_tree
         # No plan available, use default wait action
         return SensingAction(agent_id, Tuple{Int, Int}[], false)
     end
-    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx || plan_type == :macro_approx_099 || plan_type == :macro_approx_095 || plan_type == :macro_approx_090 || plan_type == :prior_based || plan_type == :pbvi || plan_type == :pbvi_policy_tree
+    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx || plan_type == :macro_approx_099 || plan_type == :macro_approx_095 || plan_type == :macro_approx_090 || plan_type == :prior_based || plan_type == :pbvi
         # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, greedy sequence, macro-approximate sequence, or prior-based sequence
         if !isempty(plan)
             # Get the action at the current plan index
@@ -268,13 +268,13 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
         
     elseif plan_type == :policy || plan_type == :pbvi_policy_tree
         # Execute reactive policy (closed-loop)
-        @infiltrate
         if agent.reactive_policy !== nothing
             # Use the reactive policy function directly
-            @infiltrate
             # Pass the current time to the reactive policy
-            planned_action = agent.reactive_policy(local_obs_history, gs_state.time_step)
-            @infiltrate
+            planned_action = agent.reactive_policy(local_obs_history, current_time)
+            if agent.id == 2
+                @infiltrate
+            end
         else
             # Fallback to old policy tree method (only if plan is not nothing)
             if plan !== nothing

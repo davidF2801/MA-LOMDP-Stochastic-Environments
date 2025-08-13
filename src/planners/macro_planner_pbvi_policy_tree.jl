@@ -30,7 +30,7 @@ import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefMa
        ..Agents.BeliefManagement.clear_belief_evolution_cache!, ..Agents.BeliefManagement.get_cache_stats,
        ..Agents.BeliefManagement.beliefs_are_equivalent
 
-export best_policy_tree, calculate_policy_tree_reward
+export best_policy_tree, calculate_policy_tree_reward, create_debuggable_policy_tree, print_policy_tree_structure, export_policy_tree_to_dict, inspect_policy_node, find_policy_nodes
 
 # PBVI-specific types for policy trees
 struct ClockVector
@@ -76,10 +76,10 @@ end
 best_policy_tree(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state)::Function
   – Use PBVI to find the best reactive policy
   – Build belief set, run value iteration, extract policy tree
-  – Return a reactive policy function
+  – Return a reactive policy function AND the policy tree structure for debugging
 """
 function best_policy_tree(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=120, N_particles::Int=64, N_sweeps::Int=5, ε::Float64=0.1)
+                    N_seed::Int=30, N_particles::Int=32, N_sweeps::Int=50, ε::Float64=0.1)
     # Start timing
     start_time = time()
     
@@ -97,34 +97,22 @@ function best_policy_tree(env, belief::Belief, agent, C::Int, other_scripts, gs_
     println("🔄 Building belief set for PBVI policy tree...")
     # Build belief set
     𝔅 = build_belief_set(B_clean, agent_i, τ_i, agents_j, τ_js_vector, H, env, gs_state, N_seed)
-    @infiltrate
     println("🔄 Running PBVI with $(length(𝔅)) belief points...")
     # Run PBVI
     VALUE, POLICY = pbvi_policy_tree(𝔅, N_particles, N_sweeps, ε, agent_i, env, gs_state)
-    @infiltrate
+    
+    # Create a clear policy tree structure for debugging
+    policy_tree = create_debuggable_policy_tree(𝔅, POLICY, VALUE, agent_i, env)
+    
     # Extract reactive policy from policy tree
     reactive_policy = extract_reactive_policy(POLICY, VALUE, 𝔅, agent_i, env, gs_state, H)
-    
-    # Debug: Print some policy tree statistics
-    println("🔍 Policy Tree Debug:")
-    println("  Total policy tree nodes: $(length(𝔅))")
-    println("  Total policy entries: $(length(POLICY))")
-    
-    # Count different action types
-    action_counts = Dict{SensingAction, Int}()
-    for (ptn, action) in POLICY
-        action_counts[action] = get(action_counts, action, 0) + 1
-    end
-    
-    println("  Action distribution:")
-    for (action, count) in action_counts
-        action_str = isempty(action.target_cells) ? "WAIT" : "SENSE$(action.target_cells)"
-        println("    $action_str: $count")
-    end
+    @infiltrate
+    # Debug: Print policy tree structure clearly
+    println("🔍 Policy Tree Structure:")
+    print_policy_tree_structure(policy_tree)
     
     # Store the reactive policy in the agent
     agent.reactive_policy = reactive_policy
-    @infiltrate
     # End timing
     end_time = time()
     planning_time = end_time - start_time
@@ -135,7 +123,7 @@ function best_policy_tree(env, belief::Belief, agent, C::Int, other_scripts, gs_
     cache_stats = get_cache_stats()
     println("📊 Cache statistics: $(cache_stats[:hits]) hits, $(cache_stats[:misses]) misses, $(round(cache_stats[:hit_rate] * 100, digits=1))% hit rate")
     
-    return reactive_policy, planning_time
+    return reactive_policy, planning_time, policy_tree
 end
 
 """
@@ -259,9 +247,6 @@ function simulate_one_step_policy_tree(τ_clock::ClockVector, b_sys::Belief, act
     for j in agents_j
         # Get agent j's current observation history
         agent_j_obs_history = get(agent_obs_histories, j.id, Vector{Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}}())
-        if !isempty(agent_j_obs_history)
-            @infiltrate
-        end
         if j_senses_at_time(j, t_global, gs_state, agent_j_obs_history)
             cell_j = scheduled_cell(j, t_global, gs_state, agent_j_obs_history)
             if cell_j !== nothing
@@ -317,13 +302,50 @@ function build_belief_set(B_clean::Belief, agent_i::Agent, τ_i::Int, agents_j::
             agent_obs_histories = deepcopy(all_agent_histories)
             (_, τ, b_sys, obs_symbol, all_agent_obs_histories, _) = simulate_one_step_policy_tree(τ, b_sys, a_rand, agent_i, agents_j, env, gs_state, agent_obs_histories)
             if agent_i.id == 2
-                @infiltrate
+                # Debug point for agent 2
             end
             # Update all agent histories with the results from simulation
             all_agent_histories = all_agent_obs_histories
             
             # Create a single policy tree node with all agents' observation histories
             push!(𝔅, PolicyTreeNode(τ, deepcopy(all_agent_histories), deepcopy(b_sys)))
+        end
+    end
+    
+    # Ensure we have coverage for all possible phase combinations
+    println("🔍 Ensuring phase coverage...")
+    all_agents = [env.agents[j] for j in sort(collect(keys(env.agents)))]
+    agent_i_index = find_agent_index(agent_i, env)
+    
+    # Generate additional belief points for missing phase combinations
+    for phase_combination in generate_all_phase_combinations(all_agents, agent_i)
+        clock = ClockVector(phase_combination)
+        clock_key = Tuple(clock.phases)
+        
+        # Check if we already have nodes for this phase combination
+        existing_nodes = [ptn for ptn in 𝔅 if Tuple(ptn.clock.phases) == clock_key]
+        
+        if length(existing_nodes) < 2  # Ensure at least 2 nodes per phase combination
+            # Create additional belief points for this phase combination
+            for extra_seed in 1:2
+                # Sample a belief state
+                b_extra = deepcopy(B_clean)
+                # Add some random observations to create variety
+                for _ in 1:rand(0:3)
+                    cell = (rand(1:env.width), rand(1:env.height))
+                    state = rand([NO_EVENT, EVENT_PRESENT])
+                    b_extra = collapse_belief_to(b_extra, cell, state)
+                end
+                
+                # Create empty observation histories for this phase
+                empty_histories = Dict{Int, Vector{Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}}}()
+                for agent in all_agents
+                    empty_histories[agent.id] = Vector{Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}}()
+                end
+                
+                push!(𝔅, PolicyTreeNode(clock, empty_histories, b_extra))
+                total_generated += 1
+            end
         end
     end
     
@@ -386,7 +408,6 @@ function pbvi_policy_tree(𝔅::Vector{PolicyTreeNode}, N_particles::Int, N_swee
                     step_start = time()
                     # Use the observation histories from the current policy tree node
                     agent_obs_histories = deepcopy(ptn.agent_observation_histories)
-                    @infiltrate
                     (r, τ′, b′, obs_symbol, all_agent_obs_histories, evolve_time) = simulate_one_step_policy_tree(copy(ptn.clock), copy(ptn.belief), a, 
                                                     agent_i, get_other_agents(agent_i, env), env, gs_state, agent_obs_histories)
                     step_time = time() - step_start
@@ -455,12 +476,15 @@ function extract_reactive_policy(POLICY::Dict{PolicyTreeNode, SensingAction}, VA
         
         for (i, agent) in enumerate(all_agents)
             # Calculate actual phase based on current time and agent's phase offset
-            actual_phase = mod((current_time - agent.phase_offset), agent.trajectory.period)
+            actual_phase = mod((current_time + agent.phase_offset), agent.trajectory.period)
             push!(current_phases, actual_phase)
         end
         current_clock = ClockVector(current_phases)
         # Find matching policy tree nodes based on clock phases and agent i's observation history
         candidate_ptns = PolicyTreeNode[]
+        if current_time == 7 && agent_i.id == 2
+            @infiltrate
+        end
         for ptn in 𝔅
             if ptn.clock.phases == current_clock.phases
                 # Extract agent i's observation history from the policy tree node
@@ -476,16 +500,55 @@ function extract_reactive_policy(POLICY::Dict{PolicyTreeNode, SensingAction}, VA
             end
         end
         if isempty(candidate_ptns)
-            # If no exact match, find the closest one based on observation history similarity
-            if !isempty(𝔅)
-                # Sort by phase difference and history similarity
-                sort!(𝔅, by=ptn -> sum(abs.(ptn.clock.phases .- current_clock.phases)) + 
-                                     (1.0 - calculate_history_similarity_partial(ptn.agent_observation_histories, standardized_history)))
-                best_ptn = 𝔅[1]
-            else
-                # Fallback: return wait action
-                return SensingAction(agent_i.id, Tuple{Int, Int}[], false)
+            # If no exact phase match, generate a feasible action for the current phase
+            # This ensures we never return an infeasible action
+            
+            # Generate feasible actions for the current phase
+            feasible_actions = all_pointings(agent_i, current_clock, env)
+            
+            # Ensure we always have at least the WAIT action
+            if isempty(feasible_actions)
+                push!(feasible_actions, SensingAction(agent_i.id, Tuple{Int, Int}[], false))
             end
+            
+            # Choose the best feasible action based on current belief
+            best_action = SensingAction(agent_i.id, Tuple{Int, Int}[], false)  # Default to wait
+            best_value = -Inf
+            
+            for action in feasible_actions
+                # Simple heuristic: prefer sensing actions over wait, prefer cells with higher uncertainty
+                if !isempty(action.target_cells)
+                    # Calculate expected information gain
+                    info_gain = 0.0
+                    for cell in action.target_cells
+                        # Use agent's local belief if available, otherwise use a simple heuristic
+                        if agent_i.belief !== nothing && haskey(agent_i.belief, :uncertainty_map)
+                            x, y = cell
+                            if 1 <= x <= size(agent_i.belief.uncertainty_map, 2) && 1 <= y <= size(agent_i.belief.uncertainty_map, 1)
+                                info_gain += agent_i.belief.uncertainty_map[y, x]
+                            end
+                        else
+                            # Simple heuristic: prefer cells closer to agent's current position
+                            agent_index = find_agent_index(agent_i, env)
+                            if agent_index !== nothing
+                                phase = current_clock.phases[agent_index]
+                                agent_pos = get_position_at_time(agent_i.trajectory, phase)
+                                distance = sqrt((cell[1] - agent_pos[1])^2 + (cell[2] - agent_pos[2])^2)
+                                info_gain += 1.0 / (1.0 + distance)  # Closer cells get higher score
+                            else
+                                info_gain += 1.0  # Default score if we can't calculate distance
+                            end
+                        end
+                    end
+                    
+                    if info_gain > best_value
+                        best_value = info_gain
+                        best_action = action
+                    end
+                end
+            end
+            
+            return best_action
         else
             # Take the policy tree node with highest value among candidates
             best_value = -Inf
@@ -496,21 +559,223 @@ function extract_reactive_policy(POLICY::Dict{PolicyTreeNode, SensingAction}, VA
                     best_ptn = ptn
                 end
             end
-        end
-        
-        # Get the action from the best policy tree node
-        if haskey(POLICY, best_ptn)
-            action = POLICY[best_ptn]
-            return action
-        else
-            return SensingAction(agent_i.id, Tuple{Int, Int}[], false)
+            
+            # Get the action from the best policy tree node
+            if haskey(POLICY, best_ptn)
+                action = POLICY[best_ptn]
+                
+                # CRITICAL: Verify that this action is feasible for the current phase
+                if is_action_feasible_for_phase(action, agent_i, current_clock, env)
+                    return action
+                else
+                    # Generate a feasible action instead
+                    feasible_actions = all_pointings(agent_i, current_clock, env)
+                    if !isempty(feasible_actions)
+                        return feasible_actions[1]  # Return first feasible action
+                    else
+                        return SensingAction(agent_i.id, Tuple{Int, Int}[], false)
+                    end
+                end
+            else
+                return SensingAction(agent_i.id, Tuple{Int, Int}[], false)
+            end
         end
     end
     
     return reactive_policy
 end
 
+"""
+Check if an action is feasible for the current phase
+"""
+function is_action_feasible_for_phase(action::SensingAction, agent::Agent, clock::ClockVector, env)
+    # Get agent position at this phase
+    agent_index = find_agent_index(agent, env)
+    if agent_index === nothing
+        return false
+    end
+    
+    phase = clock.phases[agent_index]
+    pos = get_position_at_time(agent.trajectory, phase)
+    
+    # Get available cells in field of view for this phase
+    available_cells = get_field_of_regard_at_position(agent, pos, env)
+    
+    # Check if action targets are in available cells
+    for target_cell in action.target_cells
+        if !(target_cell in available_cells)
+            return false
+        end
+    end
+    
+    # Check battery feasibility
+    if !check_battery_feasible(agent, action, agent.battery_level)
+        return false
+    end
+    
+    return true
+end
+
 # Helper functions
+
+"""
+Create a debuggable policy tree structure that's easy to inspect
+"""
+function create_debuggable_policy_tree(𝔅::Vector{PolicyTreeNode}, POLICY::Dict{PolicyTreeNode, SensingAction}, 
+                                     VALUE::Dict{PolicyTreeNode, Float64}, agent_i::Agent, env)
+    # Group policy tree nodes by clock phases for easier inspection
+    policy_tree = Dict{Tuple{Vararg{Int}}, Vector{Dict{String, Any}}}()
+    
+    for ptn in 𝔅
+        clock_key = Tuple(ptn.clock.phases)
+        
+        # Create a readable representation of this node
+        node_info = Dict{String, Any}()
+        
+        # Clock information
+        node_info["clock_phases"] = ptn.clock.phases
+        node_info["clock_description"] = describe_clock_phases(ptn.clock, agent_i, env)
+        
+        # Belief information
+        node_info["belief_summary"] = belief_summary(ptn.belief)
+        node_info["total_uncertainty"] = sum(ptn.belief.uncertainty_map)
+        
+        # Agent observation histories
+        node_info["agent_obs_histories"] = Dict{Int, Vector{String}}()
+        for (agent_id, obs_history) in ptn.agent_observation_histories
+            obs_strings = String[]
+            for (timestep, obs_symbols) in obs_history
+                obs_str = "t$(timestep): ["
+                for (cell, state) in obs_symbols
+                    state_str = state == EVENT_PRESENT ? "EVENT" : "NO_EVENT"
+                    obs_str *= "($(cell[1]),$(cell[2]))=$state_str, "
+                end
+                obs_str = chop(obs_str, tail=2) * "]"
+                push!(obs_strings, obs_str)
+            end
+            node_info["agent_obs_histories"][agent_id] = obs_strings
+        end
+        
+        # Policy information
+        if haskey(POLICY, ptn)
+            action = POLICY[ptn]
+            node_info["action"] = action_to_string(action)
+            node_info["action_type"] = isempty(action.target_cells) ? "WAIT" : "SENSE"
+        else
+            node_info["action"] = "NO_ACTION"
+            node_info["action_type"] = "NONE"
+        end
+        
+        # Value information
+        if haskey(VALUE, ptn)
+            node_info["value"] = VALUE[ptn]
+        else
+            node_info["value"] = 0.0
+        end
+        
+        # Add to policy tree
+        if !haskey(policy_tree, clock_key)
+            policy_tree[clock_key] = Vector{Dict{String, Any}}()
+        end
+        push!(policy_tree[clock_key], node_info)
+    end
+    
+    return policy_tree
+end
+
+"""
+Print the policy tree structure in a clear, readable format
+"""
+function print_policy_tree_structure(policy_tree::Dict{Tuple{Vararg{Int}}, Vector{Dict{String, Any}}})
+    println("📋 Policy Tree Summary:")
+    println("  Total clock configurations: $(length(policy_tree))")
+    
+    total_nodes = sum(length(nodes) for nodes in values(policy_tree))
+    println("  Total policy nodes: $total_nodes")
+    
+    # Group by clock configuration
+    for (clock_key, nodes) in policy_tree
+        println("\n🕐 Clock Configuration: $clock_key")
+        println("  Description: $(describe_clock_phases_general(clock_key))")
+        println("  Nodes in this configuration: $(length(nodes))")
+        
+        # Show action distribution for this clock configuration
+        action_counts = Dict{String, Int}()
+        for node in nodes
+            action_type = get(node, "action_type", "NONE")
+            action_counts[action_type] = get(action_counts, action_type, 0) + 1
+        end
+        
+        println("  Action distribution:")
+        for (action_type, count) in action_counts
+            println("    $action_type: $count")
+        end
+        
+        # Show a few example nodes
+        println("  Example nodes:")
+        for (i, node) in enumerate(nodes[1:min(3, length(nodes))])
+            println("    Node $i:")
+            println("      Action: $(get(node, "action", "NO_ACTION"))")
+            println("      Value: $(round(get(node, "value", 0.0), digits=3))")
+            println("      Uncertainty: $(round(get(node, "total_uncertainty", 0.0), digits=3))")
+            
+            # Show agent i's observation history
+            agent_i_id = 1  # Assuming agent i is agent 1
+            if haskey(node["agent_obs_histories"], agent_i_id)
+                obs_history = node["agent_obs_histories"][agent_i_id]
+                if !isempty(obs_history)
+                    println("      Agent $agent_i_id observations: $(obs_history[1:min(2, length(obs_history))])")
+                end
+            end
+        end
+        
+        if length(nodes) > 3
+            println("    ... and $(length(nodes) - 3) more nodes")
+        end
+    end
+end
+
+"""
+Convert action to readable string
+"""
+function action_to_string(action::SensingAction)
+    if isempty(action.target_cells)
+        return "WAIT"
+    else
+        cells_str = join(["($(c[1]),$(c[2]))" for c in action.target_cells], ", ")
+        return "SENSE[$cells_str]"
+    end
+end
+
+"""
+Describe clock phases in human-readable format
+"""
+function describe_clock_phases(clock::ClockVector, agent_i::Agent, env)
+    all_agents = [env.agents[j] for j in sort(collect(keys(env.agents)))]
+    agent_i_index = find_agent_index(agent_i, env)
+    
+    if agent_i_index === nothing
+        return "Unknown agent configuration"
+    end
+    
+    descriptions = String[]
+    for (i, phase) in enumerate(clock.phases)
+        if i == agent_i_index
+            push!(descriptions, "Agent$(all_agents[i].id)(phase $phase - CURRENT)")
+        else
+            push!(descriptions, "Agent$(all_agents[i].id)(phase $phase)")
+        end
+    end
+    
+    return join(descriptions, ", ")
+end
+
+"""
+Describe clock phases from clock key
+"""
+function describe_clock_phases_general(clock_key::Tuple{Vararg{Int}})
+    return "Phases: $clock_key"
+end
 
 """
 Calculate similarity between observation histories
@@ -536,7 +801,7 @@ Calculate similarity between observation histories with partial matching
 function calculate_history_similarity_partial(history1::Dict{Int, Vector{Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}}}, history2::Vector{Vector{Tuple{Tuple{Int, Int}, EventState}}})
     # Extract agent i's observations from history1 (ignore timesteps for comparison)
     # For now, assume agent i is the first agent in the dictionary
-    agent_i_obs = Vector{Tuple{Tuple{Int, Int}, EventState}}[]
+    agent_i_obs = Vector{Tuple{Tuple{Int, Int}, EventState}}()
     for (agent_id, obs_history) in history1
         for (_, obs_symbols) in obs_history
             append!(agent_i_obs, obs_symbols)
@@ -627,7 +892,6 @@ function scheduled_cell(j::Agent, t::Int, gs_state, agent_j_obs_history::Vector{
             push!(grid_observations, GridObservation(j.id, cells, event_states, []))
         end
     end
-    @infiltrate
     # Get action from agent j's reactive policy
     action = j.reactive_policy(grid_observations, t)
     if !isempty(action.target_cells)
@@ -662,7 +926,7 @@ function advance_clock_vector(τ_clock::ClockVector, agents)
     # Advance phases of all agents
     new_phases = Int[]
     for (i, agent) in enumerate(agents)
-        new_phase = (τ_clock.phases[i] + 1) % agent.trajectory.period
+        new_phase = mod(τ_clock.phases[i] + 1, agent.trajectory.period)
         push!(new_phases, new_phase)
     end
     return ClockVector(new_phases)
@@ -678,7 +942,7 @@ function random_pointing(agent::Agent, τ_clock::ClockVector, env)
         return SensingAction(agent.id, Tuple{Int, Int}[], false)
     end
     phase = τ_clock.phases[agent_index]
-    pos = get_position_at_time(agent.trajectory, phase, agent.phase_offset)
+    pos = get_position_at_time(agent.trajectory, phase)
     
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
@@ -711,7 +975,7 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
         return [SensingAction(agent.id, Tuple{Int, Int}[], false)]
     end
     phase = τ_clock.phases[agent_index]
-    pos = get_position_at_time(agent.trajectory, phase, agent.phase_offset)
+    pos = get_position_at_time(agent.trajectory, phase)
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     
@@ -727,6 +991,31 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
     end
     
     return actions
+end
+
+"""
+Generate all possible phase combinations for the agents
+"""
+function generate_all_phase_combinations(all_agents::Vector{Agent}, agent_i::Agent)
+    phase_combinations = Vector{Int}[]
+    
+    # Get the period from agent_i's trajectory (assume all agents have same period)
+    period = agent_i.trajectory.period
+    
+    # Generate all combinations of phases
+    for phase1 in 0:(period-1)
+        for phase2 in 0:(period-1)
+            if length(all_agents) == 2
+                push!(phase_combinations, [phase1, phase2])
+            else
+                for phase3 in 0:(period-1)
+                    push!(phase_combinations, [phase1, phase2, phase3])
+                end
+            end
+        end
+    end
+    
+    return phase_combinations
 end
 
 @inline function find_nearest_belief_policy_tree(target::PolicyTreeNode, SLICE_BUCKET, DIGEST_LOOKUP)
@@ -867,6 +1156,128 @@ function get_field_of_regard_at_position(agent, position, env)
         end
     end
     return fov_cells
+end
+
+"""
+Export policy tree to a simple dictionary format for easy inspection
+"""
+function export_policy_tree_to_dict(policy_tree::Dict{Tuple{Vararg{Int}}, Vector{Dict{String, Any}}})
+    export_dict = Dict{String, Any}()
+    
+    for (clock_key, nodes) in policy_tree
+        clock_str = string(clock_key)
+        export_dict[clock_str] = []
+        
+        for node in nodes
+            # Create a simplified node representation
+            simple_node = Dict{String, Any}()
+            simple_node["action"] = get(node, "action", "NO_ACTION")
+            simple_node["value"] = get(node, "value", 0.0)
+            simple_node["uncertainty"] = get(node, "total_uncertainty", 0.0)
+            
+            # Simplify observation histories
+            simple_obs = Dict{String, Vector{String}}()
+            for (agent_id, obs_history) in get(node, "agent_obs_histories", Dict{Int, Vector{String}}())
+                simple_obs[string(agent_id)] = obs_history
+            end
+            simple_node["observations"] = simple_obs
+            
+            push!(export_dict[clock_str], simple_node)
+        end
+    end
+    
+    return export_dict
+end
+
+"""
+Inspect a specific policy tree node
+"""
+function inspect_policy_node(policy_tree::Dict{Tuple{Vararg{Int}}, Vector{Dict{String, Any}}}, clock_key::Tuple{Vararg{Int}}, node_index::Int)
+    nodes = policy_tree[clock_key]
+    if node_index < 1 || node_index > length(nodes)
+        println("Node index $node_index out of bounds for clock key $clock_key.")
+        return
+    end
+
+    node = nodes[node_index]
+    println("Inspecting Policy Node $node_index for Clock Key: $clock_key")
+    println("  Action: $(get(node, "action", "NO_ACTION"))")
+    println("  Value: $(round(get(node, "value", 0.0), digits=3))")
+    println("  Uncertainty: $(round(get(node, "total_uncertainty", 0.0), digits=3))")
+    
+    # Show agent i's observation history
+    agent_i_id = 1  # Assuming agent i is agent 1
+    if haskey(node["agent_obs_histories"], agent_i_id)
+        obs_history = node["agent_obs_histories"][agent_i_id]
+        println("  Agent $agent_i_id Observations:")
+        for (i, obs_str) in enumerate(obs_history)
+            println("    t$(i): $obs_str")
+        end
+    end
+end
+
+"""
+Find policy tree nodes based on specific criteria
+Returns a vector of node dictionaries that match the criteria
+"""
+function find_policy_nodes(policy_tree::Dict{Tuple{Vararg{Int}}, Vector{Dict{String, Any}}};
+                           clock_key::Tuple{Vararg{Int}}=nothing,
+                           action_type::String="ANY",
+                           value_range::Tuple{Float64, Float64}=(-Inf, Inf),
+                           uncertainty_range::Tuple{Float64, Float64}=(-Inf, Inf),
+                           observation_history::Vector{Tuple{Tuple{Int, Int}, EventState}}=nothing)
+    found_nodes = Dict{String, Any}[]
+    
+    for (ck, nodes) in policy_tree
+        if clock_key !== nothing && ck != clock_key
+            continue
+        end
+        
+        for (i, node) in enumerate(nodes)
+            # Check action type
+            if action_type != "ANY" && get(node, "action_type", "NONE") != action_type
+                continue
+            end
+            
+            # Check value range
+            value = get(node, "value", 0.0)
+            if value < value_range[1] || value > value_range[2]
+                continue
+            end
+            
+            # Check uncertainty range
+            uncertainty = get(node, "total_uncertainty", 0.0)
+            if uncertainty < uncertainty_range[1] || uncertainty > uncertainty_range[2]
+                continue
+            end
+            
+            # Check observation history (if provided)
+            if observation_history !== nothing
+                # Extract agent i's observation history from the node
+                agent_i_history_str = get(node, "agent_obs_histories", Dict{Int, Vector{String}}())
+                agent_i_history_vec = Vector{Vector{Tuple{Tuple{Int, Int}, EventState}}}()
+                for (_, obs_symbols_str) in agent_i_history_str
+                    obs_symbols_vec = Vector{Tuple{Tuple{Int, Int}, EventState}}()
+                    for (cell_str, state_str) in obs_symbols_str
+                        cell = Tuple{Int, Int}(parse.(Int, split(cell_str, ",")))
+                        state = state_str == "EVENT" ? EVENT_PRESENT : NO_EVENT
+                        push!(obs_symbols_vec, (cell, state))
+                    end
+                    push!(agent_i_history_vec, obs_symbols_vec)
+                end
+                
+                # Compare with the provided observation history
+                if agent_i_history_vec != observation_history
+                    continue
+                end
+            end
+            
+            # If all criteria match, add to found nodes
+            push!(found_nodes, node)
+        end
+    end
+    
+    return found_nodes
 end
 
 end # module 

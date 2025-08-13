@@ -59,6 +59,17 @@ struct SensingAction
     communicate::Bool  # Whether to communicate with others
 end
 
+# Add equality and hash methods for SensingAction to fix duplicate key issues
+Base.isequal(a1::SensingAction, a2::SensingAction) = 
+    a1.agent_id == a2.agent_id && 
+    a1.target_cells == a2.target_cells && 
+    a1.communicate == a2.communicate
+
+Base.:(==)(a1::SensingAction, a2::SensingAction) = isequal(a1, a2)
+
+Base.hash(a::SensingAction, h::UInt) = 
+    hash(a.agent_id, hash(a.target_cells, hash(a.communicate, h)))
+
 """
 GridObservation - What agents can observe (their sensor footprint)
 """
@@ -549,16 +560,16 @@ const HETEROGENEOUS_CELL_TYPES = [
     (name="Immune", lambda=0.0002, beta0=0.0002, alpha=0.03, delta=0.05),
 
     # Fleeting events – ignite occasionally, burn out fast
-    (name="Fleeting", lambda=0.0050, beta0=0.0150, alpha=0.05, delta=0.85),
+    (name="Fleeting", lambda=0.0050, beta0=0.0150, alpha=0.01, delta=0.85),
 
     # Long-lasting events – rare ignition, but ~10-step lifetime
     (name="Long-lasting", lambda=0.0020, beta0=0.0020, alpha=0.01, delta=0.99),
 
     # Moderate cells – balanced ignition and lifetime ≈¼ period
-    (name="Moderate", lambda=0.0100, beta0=0.0100, alpha=0.02, delta=0.85),
+    (name="Moderate", lambda=0.0100, beta0=0.0100, alpha=0.01, delta=0.85),
 
     # High-contagion cells – ignite easily and spread, moderate lifetime
-    (name="High-contagion", lambda=0.0300, beta0=0.0100, alpha=0.1, delta=0.85)
+    (name="High-contagion", lambda=0.0200, beta0=0.0100, alpha=0.1, delta=0.85)
 ]
 
 """

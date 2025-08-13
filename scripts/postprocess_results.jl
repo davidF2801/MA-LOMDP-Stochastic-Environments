@@ -29,17 +29,30 @@ println("📊 Starting postprocessing analysis...")
 # =============================================================================
 
 # Specific results directory to analyze
-TARGET_RUN = "run_2025-07-30T15-16-00-337"
+#TARGET_RUN = "run_2025-08-01T17-57-32-107"
+TARGET_RUN = "run_2025-08-01T17-58-23-840"
 RESULTS_DIR = joinpath("..", "results", TARGET_RUN)
 OUTPUT_DIR = RESULTS_DIR  # Save results in the same folder we're reading from
 
 # Performance metrics to analyze
-METRICS = [:event_observation_percentage, :ndd_life, :final_uncertainty]
+METRICS = [:event_observation_percentage, :ndd_expected, :ndd_actual, :final_uncertainty]
 
 # Planning modes to compare
 #PLANNING_MODES = [:sweep, :script, :random]
 #PLANNING_MODES = [:script,:prior_based, :macro_approx_099, :macro_approx_095, :macro_approx_090, :sweep]
-PLANNING_MODES = [:prior_based, :macro_approx_090, :macro_approx_09999999, :script, :sweep]
+#PLANNING_MODES = [:script, :prior_based,:sweep,:macro_approx_095, :macro_approx_090, :random]
+PLANNING_MODES = [:pbvi, :prior_based, :random]
+
+# Function to get display name for planning modes
+function get_mode_display_name(mode::Symbol)
+    if mode == :script
+        return "ABBA"
+    elseif mode == :pbvi
+        return "SB-ABBA"
+    else
+        return string(mode)
+    end
+end
 
 # =============================================================================
 # DATA EXTRACTION FUNCTIONS
@@ -77,11 +90,17 @@ function extract_metrics_from_file(filepath::String)
                         value = parse(Float64, strip(value_str, '%'))
                         metrics[:event_observation_percentage] = value
                     
-                    # Extract NDD
-                    elseif contains(line, "Normalized Detection Delay (lifetime):")
+                    # Extract NDD (expected lifetime)
+                    elseif contains(line, "Normalized Detection Delay (expected lifetime):")
                         value_str = split(line, ":")[end]
                         value = parse(Float64, strip(value_str))
-                        metrics[:ndd_life] = value
+                        metrics[:ndd_expected] = value
+                    
+                    # Extract NDD (actual lifetime)
+                    elseif contains(line, "Normalized Detection Delay (actual lifetime):")
+                        value_str = split(line, ":")[end]
+                        value = parse(Float64, strip(value_str))
+                        metrics[:ndd_actual] = value
                     
                     # Extract final uncertainty
                     elseif contains(line, "Final average uncertainty:")
@@ -316,7 +335,7 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
         for (i, mode) in enumerate(PLANNING_MODES)
             if haskey(mode_data, mode) && !isempty(mode_data[mode])
                 boxplot!(p, fill(i, length(mode_data[mode])), mode_data[mode], 
-                    label=string(mode), 
+                    label=get_mode_display_name(mode), 
                     fillalpha=0.7,
                     linewidth=2)
             end
@@ -325,8 +344,10 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
         # Create descriptive metric title
         metric_title = if metric == :event_observation_percentage
             "Event Observation %"
-        elseif metric == :ndd_life
-            "Normalized Detection Delay"
+        elseif metric == :ndd_expected
+            "NDD (Expected Lifetime)"
+        elseif metric == :ndd_actual
+            "NDD (Actual Lifetime)"
         elseif metric == :final_uncertainty
             "Final Uncertainty"
         else
@@ -337,7 +358,7 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
             title="$(metric_title) Comparison",
             xlabel="Planning Mode",
             ylabel=metric_title,
-            xticks=(1:length(PLANNING_MODES), [string(m) for m in PLANNING_MODES]),
+            xticks=(1:length(PLANNING_MODES), [get_mode_display_name(m) for m in PLANNING_MODES]),
             xrotation=45,
             legend=false,
             grid=true,
@@ -355,7 +376,7 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
         for mode in PLANNING_MODES
             if haskey(mode_data, mode) && !isempty(mode_data[mode])
                 values = mode_data[mode]
-                println("      $(mode): mean=$(round(mean(values), digits=3)), std=$(round(std(values), digits=3)), n=$(length(values))")
+                println("      $(get_mode_display_name(mode)): mean=$(round(mean(values), digits=3)), std=$(round(std(values), digits=3)), n=$(length(values))")
             end
         end
     end
@@ -412,7 +433,7 @@ function create_uncertainty_evolution_plots(all_data::Dict{String, Dict}, output
                     time_points = 1:max_length
                     plot!(p, time_points, means, 
                         ribbon=stds,
-                        label=string(mode),
+                        label=get_mode_display_name(mode),
                         linewidth=2,
                         fillalpha=0.3)
                 end
@@ -473,7 +494,7 @@ function create_average_uncertainty_comparison(all_data::Dict{String, Dict}, out
             time_points = 1:max_length
             plot!(p, time_points, means, 
                 ribbon=stds,
-                label=string(mode),
+                label=get_mode_display_name(mode),
                 linewidth=3,
                 fillalpha=0.2,
                 marker=:circle,
@@ -577,8 +598,8 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
         return nothing
     end
     
-    # Prepare data for plotting
-    modes = collect(keys(averages))
+    # Prepare data for plotting - use same order as PLANNING_MODES for consistency
+    modes = PLANNING_MODES
     metrics = collect(METRICS)
     
     # Create subplots for each metric
@@ -589,9 +610,9 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
         mode_labels = String[]
         
         for mode in modes
-            if haskey(averages[mode], metric)
+            if haskey(averages, mode) && haskey(averages[mode], metric)
                 push!(values, averages[mode][metric])
-                push!(mode_labels, string(mode))
+                push!(mode_labels, get_mode_display_name(mode))
             end
         end
         
@@ -599,8 +620,10 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
             # Create descriptive metric title
             metric_title = if metric == :event_observation_percentage
                 "Event Observation %"
-            elseif metric == :ndd_life
-                "Normalized Detection Delay"
+            elseif metric == :ndd_expected
+                "NDD (Expected Lifetime)"
+            elseif metric == :ndd_actual
+                "NDD (Actual Lifetime)"
             elseif metric == :final_uncertainty
                 "Final Uncertainty"
             else
@@ -639,7 +662,12 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
     end
     
     # Combine plots with better layout
-    if length(plots) == 3
+    if length(plots) == 4
+        combined_plot = plot(plots[1], plots[2], plots[3], plots[4],
+            layout=(2,2),
+            size=(1200, 800),
+            margin=5Plots.mm)
+    elseif length(plots) == 3
         combined_plot = plot(plots[1], plots[2], plots[3],
             layout=(1,3),
             size=(1200, 400),
@@ -695,16 +723,17 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
     p1 = plot()
     p2 = plot()
     p3 = plot()
+    p4 = plot()
     
     # Add boxplots for each metric
     for (i, metric) in enumerate(METRICS)
-        p = i == 1 ? p1 : i == 2 ? p2 : p3
+        p = i == 1 ? p1 : i == 2 ? p2 : i == 3 ? p3 : p4
         
         # Add boxplots for each mode
         for (j, mode) in enumerate(PLANNING_MODES)
             if haskey(metric_data[metric], mode) && !isempty(metric_data[metric][mode])
                 boxplot!(p, fill(j, length(metric_data[metric][mode])), metric_data[metric][mode], 
-                    label=string(mode), 
+                    label=get_mode_display_name(mode), 
                     fillalpha=0.7,
                     linewidth=2)
             end
@@ -713,8 +742,10 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
         # Create descriptive metric title
         metric_title = if metric == :event_observation_percentage
             "Event Observation %"
-        elseif metric == :ndd_life
-            "Normalized Detection Delay"
+        elseif metric == :ndd_expected
+            "NDD (Expected Lifetime)"
+        elseif metric == :ndd_actual
+            "NDD (Actual Lifetime)"
         elseif metric == :final_uncertainty
             "Final Uncertainty"
         else
@@ -725,7 +756,7 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
             title=metric_title,
             xlabel="Planning Mode",
             ylabel=metric_title,
-            xticks=(1:length(PLANNING_MODES), [string(m) for m in PLANNING_MODES]),
+            xticks=(1:length(PLANNING_MODES), [get_mode_display_name(m) for m in PLANNING_MODES]),
             xrotation=45,
             legend=false,
             grid=true,
@@ -734,9 +765,9 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
     end
     
     # Combine plots
-    combined_plot = plot(p1, p2, p3, 
-        layout=(1,3), 
-        size=(1200, 400))
+    combined_plot = plot(p1, p2, p3, p4, 
+        layout=(2,2), 
+        size=(1200, 800))
     
     # Save plot
     plot_filename = joinpath(output_dir, "combined_comparison.png")
@@ -778,7 +809,7 @@ function main()
     
     for mode in PLANNING_MODES
         if haskey(averages, mode)
-            println("$(mode):")
+            println("$(get_mode_display_name(mode)):")
             for metric in METRICS
                 if haskey(averages[mode], metric)
                     println("  $(metric): $(round(averages[mode][metric], digits=3))")

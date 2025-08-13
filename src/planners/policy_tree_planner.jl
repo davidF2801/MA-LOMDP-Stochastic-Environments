@@ -327,7 +327,7 @@ function simulate(env, node::SNode, agent::Agent, gs_state, horizon, c_ucb)
             if other_agent !== nothing && other_agent.reactive_policy !== nothing
                 # Use reactive policy to get action
                 # For now, use empty observation history (can be enhanced later)
-                action_j = other_agent.reactive_policy(GridObservation[])
+                action_j = other_agent.reactive_policy(GridObservation[], node.t)
                 push!(obs_set, (j, action_j))
             else
                 # Fallback to fixed sequence
@@ -420,43 +420,16 @@ function simulate(env, node::SNode, agent::Agent, gs_state, horizon, c_ucb)
         end
     end
     
-function extract_policy_from_node(node::SNode)
-    if isempty(node.children)
-        return Dict()
+"""
+extract_policy_from_node(s_node)
+Extract a simple policy structure from a search node
+"""
+function extract_policy_from_node(s_node::SNode)
+    policy = Dict()
+    for (action, a_node) in s_node.children
+        policy[action] = a_node
     end
-    
-    # Find the best action based on visit counts and values
-    best_action = nothing
-    best_value = -Inf
-    
-    for (action, a_node) in node.children
-        a_node = a_node::ANode  # Type assertion
-        if a_node.visits > 0
-            value = a_node.total_value / a_node.visits
-            if value > best_value
-                best_value = value
-                best_action = action
-            end
-        end
-    end
-    
-    if best_action === nothing
-        return Dict()
-    end
-    
-    # Create policy subtree for the best action only
-    best_a_node = node.children[best_action]::ANode
-    policy_subtree = Dict()
-    
-    for (local_obs, s_node) in best_a_node.outcomes
-        # The local_obs are already filtered to only include this agent's observations
-        # Recursively extract policy for this outcome
-        subtree_policy = extract_policy_from_node(s_node)
-        policy_subtree[local_obs] = subtree_policy
-    end
-    
-    result = Dict(best_action => policy_subtree)
-    return result
+    return policy
 end
 
 """
@@ -775,7 +748,7 @@ function create_reactive_policy(policy_forest::Vector{Tuple{Float64, Dict}}, age
     (_, policy) = best_entry
     
     # Create a reactive policy function
-    function reactive_policy(obs_history)
+    function reactive_policy(obs_history, current_time::Int)
         # Navigate through the policy tree based on observation history
         current_tree = policy
         
@@ -792,10 +765,10 @@ function create_reactive_policy(policy_forest::Vector{Tuple{Float64, Dict}}, age
                     if haskey(observation_subtrees, obs_key)
                         current_tree = observation_subtrees[obs_key]
                         found = true
-                            break
-                        end
+                        break
                     end
-                    
+                end
+                
                 if !found
                     # Progressive widening: try to find closest observation across all actions
                     all_observation_keys = Set()
@@ -812,7 +785,7 @@ function create_reactive_policy(policy_forest::Vector{Tuple{Float64, Dict}}, age
                             if haskey(observation_subtrees, closest_key)
                                 current_tree = observation_subtrees[closest_key]
                                 found = true
-                            break
+                                break
                             end
                         end
                     end
@@ -820,11 +793,11 @@ function create_reactive_policy(policy_forest::Vector{Tuple{Float64, Dict}}, age
                     if !found
                         return SensingAction(agent_id, Tuple{Int, Int}[], false)  # default wait
                     end
-                    end
                 else
-                return SensingAction(agent_id, Tuple{Int, Int}[], false)
+                    return SensingAction(agent_id, Tuple{Int, Int}[], false)
                 end
             end
+        end
         
         # Return the action at the current node
         if current_tree isa Dict && !isempty(current_tree)
@@ -834,7 +807,6 @@ function create_reactive_policy(policy_forest::Vector{Tuple{Float64, Dict}}, age
             return SensingAction(agent_id, Tuple{Int, Int}[], false)
         end
     end
-    
     return reactive_policy
 end
 
@@ -848,17 +820,17 @@ function convert_observation_to_key(obs, agent_id)
 end
 
 """
-execute_reactive_policy(agent, obs_history)
+execute_reactive_policy(agent, obs_history, current_time::Int)
 Execute the reactive policy for an agent based on observation history
 """
-function execute_reactive_policy(agent, obs_history)
+function execute_reactive_policy(agent, obs_history, current_time::Int)
     if agent.reactive_policy === nothing
         # No reactive policy available, return wait action
         return SensingAction(agent.id, Tuple{Int, Int}[], false)
     end
     
-    # Execute the reactive policy with the observation history
-    return agent.reactive_policy(obs_history)
+    # Execute the reactive policy with the observation history and current time
+    return agent.reactive_policy(obs_history, current_time)
 end
 
 """
@@ -885,7 +857,7 @@ end
 """
 best_policy_tree(env, belief, agent, C, gs_state; rng=Random.GLOBAL_RNG)
 Main entry point for policy tree planning - called by ground station
-Returns a reactive policy function that can handle observation histories
+Returns a reactive policy function that can handle observation histories AND the policy tree structure
 """
 function best_policy_tree(env, belief::Belief, agent::Agent, C::Int, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG)
     # Start timing
@@ -922,6 +894,9 @@ function best_policy_tree(env, belief::Belief, agent::Agent, C::Int, gs_state; r
     # Store the reactive policy in the agent for future use
     agent.reactive_policy = reactive_policy
     
+    # Create a simple policy tree structure for debugging (similar to PBVI)
+    policy_tree = create_simple_policy_tree(policy_forest, agent.id)
+    
     # For policy planning, return the reactive policy itself
     # The ground station will handle this differently than action sequences
     
@@ -931,7 +906,7 @@ function best_policy_tree(env, belief::Belief, agent::Agent, C::Int, gs_state; r
     
     println("✅ Reactive policy tree planning completed in $(round(planning_time, digits=3)) seconds")
     
-    return reactive_policy, planning_time
+    return reactive_policy, planning_time, policy_tree
 end
 
 """
@@ -1002,7 +977,7 @@ function build_complete_tree_for_action(env, node::SNode, a_node::ANode, agent::
             
             if other_agent !== nothing && other_agent.reactive_policy !== nothing
                 # Use reactive policy to get action
-                action_j = other_agent.reactive_policy(GridObservation[])
+                action_j = other_agent.reactive_policy(GridObservation[], node.t)
                 push!(obs_set, (j, action_j))
             else
                 # Fallback to fixed sequence
@@ -1078,6 +1053,40 @@ function build_complete_tree_for_action(env, node::SNode, a_node::ANode, agent::
                                                    a_node.action, 0.0)
         return immediate_reward
     end
+end
+
+"""
+create_simple_policy_tree(policy_forest, agent_id)
+Create a simplified policy tree structure for debugging
+"""
+function create_simple_policy_tree(policy_forest::Vector{Tuple{Float64, Dict}}, agent_id::Int)
+    policy_tree = Dict()
+    for (weight, policy) in policy_forest
+        if !isempty(policy)
+            # Find the best action based on visit counts and values
+            best_action = nothing
+            best_value = -Inf
+            for (action, observation_subtrees) in policy
+                # For simplicity, we'll just take the first action and its subtree
+                # This is a placeholder and needs proper aggregation of actions/observations
+                # For now, we'll just take the first action and its subtree
+                best_action = action
+                break
+            end
+            
+            if best_action !== nothing
+                # Create a simple subtree for the best action
+                best_a_node = policy[best_action] # This is a placeholder, needs proper ANode
+                simple_subtree = Dict()
+                for (local_obs, s_node) in best_a_node.outcomes
+                    # Recursively create simple subtree
+                    simple_subtree[local_obs] = create_simple_policy_tree([(s_node.p_mass, extract_policy_from_node(s_node))], agent_id)
+                end
+                policy_tree[best_action] = simple_subtree
+            end
+        end
+    end
+    return policy_tree
 end
 
 end # module 
