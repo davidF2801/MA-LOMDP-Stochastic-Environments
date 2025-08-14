@@ -7,6 +7,7 @@ using LinearAlgebra
 using Infiltrator
 using Statistics
 using Base.Threads
+# Removed Divergences.jl - using custom KL divergence implementation instead
 using ..Types
 import ..Agents.BeliefManagement: sample_from_belief
 import ..Types: check_battery_feasible, simulate_battery_evolution
@@ -30,7 +31,7 @@ import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefMa
        ..Agents.BeliefManagement.clear_belief_evolution_cache!, ..Agents.BeliefManagement.get_cache_stats,
        ..Agents.BeliefManagement.beliefs_are_equivalent
 
-export best_script, calculate_macro_script_reward
+export best_script, calculate_macro_script_reward, calculate_sophisticated_reward, configure_reward_weights, set_reward_config_from_main, get_belief_cache_stats, get_timing_stats, get_detailed_timing_analysis, analyze_cache_efficiency, test_kl_performance, test_blas_performance
 
 # PBVI-specific types
 struct ClockVector
@@ -60,6 +61,284 @@ Base.isequal(bp1::BeliefPoint, bp2::BeliefPoint) = isequal(bp1.clock, bp2.clock)
 Base.:(==)(cv1::ClockVector, cv2::ClockVector) = isequal(cv1, cv2)
 Base.:(==)(bp1::BeliefPoint, bp2::BeliefPoint) = isequal(bp1, bp2)
 
+# Belief evolution cache for performance
+const BELIEF_EVOLUTION_CACHE = Dict{UInt64, Belief}()
+const CACHE_STATS = Dict{Symbol, Int}(:hits => 0, :misses => 0, :size => 0)
+const TIMING_STATS = Dict{Symbol, Float64}(:total_cache_time => 0.0, :total_direct_time => 0.0, :cache_calls => 0, :direct_calls => 0)
+
+# BLAS-based KL divergence optimization
+const T = Float64
+@inline clamp01(x::T) where {T<:AbstractFloat} = clamp(x, eps(T), one(T)-eps(T))
+
+"""
+Prepare candidates for fast KL divergence search using BLAS
+"""
+function prepare_kl_candidates(𝔅::Vector{BeliefPoint})
+    if isempty(𝔅)
+        return nothing
+    end
+    
+    # Get dimensions from first belief
+    num_states, height, width = size(𝔅[1].belief.event_distributions)
+    K, F = num_states, height * width  # K categories per factor, F factors
+    N = length(𝔅)
+    
+    # Stack all candidates into 3D array Q[K, F, N]
+    Q = Array{T}(undef, K, F, N)
+    
+    for (j, bp) in enumerate(𝔅)
+        belief = bp.belief
+        # Extract and normalize the belief distributions
+        for x in 1:width, y in 1:height
+            f = (y - 1) * width + x  # Factor index
+            for k in 1:num_states
+                Q[k, f, j] = clamp01(belief.event_distributions[k, y, x])
+            end
+        end
+        
+        # Normalize each factor to sum to 1
+        for f in 1:F
+            col_sum = sum(Q[:, f, j])
+            if col_sum > 0
+                Q[:, f, j] ./= col_sum
+            end
+        end
+    end
+    
+    # Precompute log(Q) and reshape for BLAS
+    LQ = log.(Q)
+    LQmat = reshape(LQ, K*F, N)  # (KF) × N
+    
+    # Pre-organize by clock vector for O(1) lookup
+    clock_groups = Dict{Vector{Int}, Vector{Int}}()  # clock -> indices
+    for (i, bp) in enumerate(𝔅)
+        key = collect(bp.clock.phases)  # Convert to Vector{Int} for Dict key
+        if !haskey(clock_groups, key)
+            clock_groups[key] = Int[]
+        end
+        push!(clock_groups[key], i)
+    end
+    
+    return (LQmat=LQmat, K=K, F=F, N=N, beliefs=𝔅, clock_groups=clock_groups)
+end
+
+"""
+Fast nearest belief search using BLAS-based KL divergence optimization
+"""
+function find_nearest_belief_blas(target::BeliefPoint, prep, SLICE_BUCKET, DIGEST_LOOKUP)
+    if prep === nothing
+        return find_nearest_belief(target, SLICE_BUCKET, DIGEST_LOOKUP)
+    end
+    
+    # O(1) lookup for same-clock candidates using pre-organized groups
+    key = collect(target.clock.phases)
+    candidate_indices = get(prep.clock_groups, key, Int[])
+    
+    if isempty(candidate_indices)
+        return target
+    end
+    
+    # Use BLAS optimization: find Q that maximizes sum(P * log(Q))
+    # This is equivalent to minimizing KL(P||Q) for fixed P
+    target_belief = target.belief
+    num_states, height, width = size(target_belief.event_distributions)
+    
+    # Prepare target belief P as a vector
+    P_vec = Vector{T}(undef, prep.K * prep.F)
+    idx = 1
+    
+    for x in 1:width, y in 1:height
+        for k in 1:num_states
+            P_vec[idx] = clamp01(target_belief.event_distributions[k, y, x])
+            idx += 1
+        end
+    end
+    
+    # Normalize P_vec to sum to 1
+    P_sum = sum(P_vec)
+    if P_sum > 0
+        P_vec ./= P_sum
+    end
+    
+    # Use pre-organized indices for fast subset access
+    LQmat_subset = prep.LQmat[:, candidate_indices]
+    
+    # Compute scores = LQ_subset' * P_vec using BLAS
+    scores = LQmat_subset' * P_vec  # length(candidate_indices) × 1 vector
+    
+    # Find the candidate with maximum score (minimum KL divergence)
+    jmax = argmax(scores)
+    
+    return prep.beliefs[candidate_indices[jmax]]
+end
+
+"""
+Clear the belief evolution cache
+"""
+function clear_belief_evolution_cache!()
+    empty!(BELIEF_EVOLUTION_CACHE)
+    CACHE_STATS[:hits] = 0
+    CACHE_STATS[:misses] = 0
+    CACHE_STATS[:size] = 0
+    TIMING_STATS[:total_cache_time] = 0.0
+    TIMING_STATS[:total_direct_time] = 0.0
+    TIMING_STATS[:cache_calls] = 0
+    TIMING_STATS[:direct_calls] = 0
+    
+
+    
+
+end
+
+"""
+Get cache statistics
+"""
+function get_belief_cache_stats()
+    return copy(CACHE_STATS)
+end
+
+
+
+
+
+"""
+Get timing statistics
+"""
+function get_timing_stats()
+    return copy(TIMING_STATS)
+end
+
+"""
+Get detailed timing analysis
+"""
+function get_detailed_timing_analysis()
+    timing_stats = get_timing_stats()
+    belief_cache_stats = get_belief_cache_stats()
+    
+    if timing_stats[:direct_calls] == 0
+        return "No timing data available yet"
+    end
+    
+    # Calculate performance metrics
+    total_calls = timing_stats[:cache_calls] + timing_stats[:direct_calls]
+    cache_hit_rate = timing_stats[:cache_calls] / total_calls * 100
+    
+    avg_direct_time = timing_stats[:total_direct_time] / timing_stats[:direct_calls]
+    total_time_saved = timing_stats[:cache_calls] * avg_direct_time
+    
+    # Use actual measured cache time
+    total_time_with_cache = timing_stats[:total_direct_time] + timing_stats[:total_cache_time]
+    total_time_without_cache = total_calls * avg_direct_time
+    
+    speedup = total_time_without_cache / total_time_with_cache
+    
+    analysis = """
+📊 Detailed Timing Analysis:
+• Total calls: $total_calls
+• Cache hits: $(timing_stats[:cache_calls]) ($(round(cache_hit_rate, digits=1))%)
+• Direct calls: $(timing_stats[:direct_calls])
+• Average direct evolution time: $(round(avg_direct_time * 1000, digits=2)) ms
+• Total direct evolution time: $(round(timing_stats[:total_direct_time] * 1000, digits=2)) ms
+• Total cache access time: $(round(timing_stats[:total_cache_time] * 1000, digits=2)) ms
+• Average cache access time: $(round((timing_stats[:total_cache_time] / max(timing_stats[:cache_calls], 1)) * 1000, digits=4)) ms
+• Estimated time saved: $(round(total_time_saved * 1000, digits=2)) ms
+• Overall speedup: $(round(speedup, digits=2))x
+• Cache size: $(belief_cache_stats[:size]) entries
+"""
+    
+    return analysis
+end
+
+"""
+Analyze cache efficiency and provide debugging information
+"""
+function analyze_cache_efficiency()
+    belief_cache_stats = get_belief_cache_stats()
+    timing_stats = get_timing_stats()
+    
+    total_calls = timing_stats[:cache_calls] + timing_stats[:direct_calls]
+    if total_calls == 0
+        return "No cache data available yet"
+    end
+    
+    cache_hit_rate = timing_stats[:cache_calls] / total_calls * 100
+    cache_utilization = belief_cache_stats[:size] / 1000 * 100  # Assuming max size of 1000
+    
+    analysis = """
+🔍 Cache Efficiency Analysis:
+• Cache hit rate: $(round(cache_hit_rate, digits=1))%
+• Cache utilization: $(round(cache_utilization, digits=1))%
+• Total unique beliefs processed: $(total_calls)
+• Cache entries stored: $(belief_cache_stats[:size])
+• Cache efficiency: $(round(cache_hit_rate / cache_utilization, digits=2)) hits per entry
+
+💡 Interpretation:
+• High hit rate ($(round(cache_hit_rate, digits=1))%) suggests beliefs are being reused effectively
+• Cache utilization ($(round(cache_utilization, digits=1))%) shows how much of cache capacity is used
+• If hit rate is much higher than utilization, beliefs may be very similar
+• Consider increasing cache size if utilization is high and hit rate could improve
+"""
+    
+    return analysis
+end
+
+"""
+Cached belief evolution using evolve_no_obs_fast
+"""
+function cached_belief_evolution(belief::Belief, env)
+    # Create a more robust cache key that considers numerical tolerance
+    # Use a quantized version of the belief for the cache key
+    cache_key = create_belief_cache_key(belief, env)
+    
+    # Check cache first with timing
+    cache_start = time()
+    if haskey(BELIEF_EVOLUTION_CACHE, cache_key)
+        CACHE_STATS[:hits] += 1
+        TIMING_STATS[:cache_calls] += 1
+        evolved_belief = deepcopy(BELIEF_EVOLUTION_CACHE[cache_key])
+        cache_time = time() - cache_start
+        TIMING_STATS[:total_cache_time] += cache_time
+        return evolved_belief
+    end
+    
+    # Cache miss - compute evolution with timing
+    CACHE_STATS[:misses] += 1
+    TIMING_STATS[:direct_calls] += 1
+    
+    start_time = time()
+    evolved_belief = evolve_no_obs_fast(belief, env, calculate_uncertainty=false)
+    direct_time = time() - start_time
+    
+    TIMING_STATS[:total_direct_time] += direct_time
+    
+    # Store in cache (with size limit to prevent memory issues)
+    if CACHE_STATS[:size] < 1000  # Limit cache size
+        BELIEF_EVOLUTION_CACHE[cache_key] = deepcopy(evolved_belief)
+        CACHE_STATS[:size] += 1
+    end
+    
+    return evolved_belief
+end
+
+"""
+Create a robust cache key for beliefs that accounts for numerical tolerance
+"""
+function create_belief_cache_key(belief::Belief, env)
+    # Quantize the belief distributions to handle numerical precision issues
+    # This should match the tolerance used in beliefs_are_equivalent (1e-10)
+    tolerance = 1e-10
+    
+    # Create a quantized version of the belief
+    quantized_distributions = round.(belief.event_distributions ./ tolerance) .* tolerance
+    
+    # Create cache key from quantized belief and environment
+    belief_hash = hash(quantized_distributions, UInt(0))
+    env_hash = hash(env.width, hash(env.height, hash(env.dynamics)))
+    cache_key = hash(belief_hash, env_hash)
+    
+    return cache_key
+end
+
 """
 Create a BeliefPoint with pre-computed digest
 """
@@ -75,7 +354,7 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state):
   – Return the best sequence
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=50, N_particles::Int=32, N_sweeps::Int=50, ε::Float64=0.1)
+                    N_seed::Int=20, N_particles::Int=32, N_sweeps::Int=50, ε::Float64=0.1)
     # Start timing
     start_time = time()
     
@@ -108,7 +387,18 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     
     # Report cache statistics
     cache_stats = get_cache_stats()
-    println("📊 Cache statistics: $(cache_stats[:hits]) hits, $(cache_stats[:misses]) misses, $(round(cache_stats[:hit_rate] * 100, digits=1))% hit rate")
+    belief_cache_stats = get_belief_cache_stats()
+    timing_stats = get_timing_stats()
+    
+    println("📊 Belief management cache: $(cache_stats[:hits]) hits, $(cache_stats[:misses]) misses, $(round(cache_stats[:hit_rate] * 100, digits=1))% hit rate")
+    println("📊 Belief evolution cache: $(belief_cache_stats[:hits]) hits, $(belief_cache_stats[:misses]) misses, size: $(belief_cache_stats[:size])")
+    
+    # Report timing statistics
+    if timing_stats[:direct_calls] > 0
+        println("⏱️  Belief evolution timing: $(timing_stats[:cache_calls]) cache hits, $(timing_stats[:direct_calls]) direct calls")
+        println(get_detailed_timing_analysis())
+        println(analyze_cache_efficiency())
+    end
     
     return best_sequence, planning_time
 end
@@ -170,20 +460,24 @@ Simulate one step forward
 function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::SensingAction, 
                           agent_i::Agent, agents_j::Vector{Agent}, env, gs_state)
 
-    # Calculate information gain
+    # Track timing for different operations
+    timing_breakdown = Dict{Symbol, Float64}()
+    
+    # Calculate sophisticated reward: R = Σ[j∈U_t] [w_H·(H_prior-H_post) + w_F·E[F_I_j]]
+    info_start = time()
     r_step = 0.0
+    
     if !isempty(action_i.target_cells)
         for cell in action_i.target_cells
-            H_before = calculate_cell_entropy(b_sys, cell)
-            # Simplified: assume perfect observation
-            H_after = 0.0
-            info_gain = H_before - H_after
-            #event_prob = get_event_probability(b_sys, cell)
-            r_step += info_gain
+            # Use the sophisticated reward function with global configuration
+            cell_reward = calculate_sophisticated_reward(b_sys, cell)
+            r_step += cell_reward
         end
     end
+    timing_breakdown[:info_gain] = time() - info_start
 
     # Calculate global time from agent_i's phase in the clock vector
+    time_calc_start = time()
     agent_i_index = find_agent_index(agent_i, env)
     # if agent_i_index == 2
     #     @infiltrate
@@ -196,7 +490,10 @@ function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::Sensi
         agent_i_phase = τ_clock.phases[agent_i_index]
         t_global = gs_state.time_step + agent_i_phase
     end
+    timing_breakdown[:time_calculation] = time() - time_calc_start
+    
     # Sample outcomes actually happening this step
+    sampling_start = time()
     state_i = nothing
     if !isempty(action_i.target_cells)
         cell_i = action_i.target_cells[1]  # Assume single cell for now
@@ -217,15 +514,23 @@ function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::Sensi
     if state_i !== nothing && !isempty(action_i.target_cells)
         b_sys = collapse_belief_to(b_sys, action_i.target_cells[1], state_i)
     end
-    # Predict one step ahead (use fast vectorized version without cache)
+    timing_breakdown[:sampling_and_collapse] = time() - sampling_start
+    
+    # Predict one step ahead (use cached belief evolution)
     evolve_start = time()
     b_sys = evolve_no_obs_fast(b_sys, env, calculate_uncertainty=false)
     evolve_time = time() - evolve_start
+    timing_breakdown[:belief_evolution] = evolve_time
+    
+    # Clock vector update
+    clock_start = time()
     τ_clock = advance_clock_vector(τ_clock, [agent_i; agents_j])
+    timing_breakdown[:clock_update] = time() - clock_start
+    
     # if agent_i_index == 2
     #     @infiltrate
     # end
-    return (r_step, τ_clock, b_sys, evolve_time)
+    return (r_step, τ_clock, b_sys, evolve_time, timing_breakdown)
 end
 
 """
@@ -245,7 +550,7 @@ function build_belief_set(B_clean::Belief, agent_i::Agent, τ_i::Int, agents_j::
             
             # Take a random action and simulate
             a_rand = random_pointing(agent_i, τ, env)
-            (_, τ, b_sys) = simulate_one_step(τ, b_sys, a_rand, agent_i, agents_j, env, gs_state)
+            (_, τ, b_sys, _, _) = simulate_one_step(τ, b_sys, a_rand, agent_i, agents_j, env, gs_state)
         end
     end
     
@@ -266,6 +571,20 @@ function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Fl
     SLICE_BUCKET  = Dict{Tuple{Vararg{Int}}, Vector{BeliefPoint}}()
     DIGEST_LOOKUP = Dict{Tuple{Vararg{Int}}, Dict{UInt64,BeliefPoint}}()
 
+    # Timing statistics
+    timing_stats = Dict{Symbol, Float64}(
+        :total_simulate_one_step => 0.0,
+        :total_nearest_neighbor => 0.0,
+        :total_action_set_gen => 0.0,
+        :total_belief_copy => 0.0
+    )
+    operation_counts = Dict{Symbol, Int}(
+        :simulate_one_step_calls => 0,
+        :nearest_neighbor_calls => 0,
+        :action_set_gen_calls => 0,
+        :belief_copy_calls => 0
+    )
+
     for bp in 𝔅
         key = Tuple(bp.clock.phases)          # hashable
         push!(get!(SLICE_BUCKET, key, BeliefPoint[]), bp)
@@ -284,9 +603,13 @@ function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Fl
         VALUE[bp] = 0.0
     end
     
+    # Prepare candidates for fast KL divergence search
+    prep = prepare_kl_candidates(𝔅)
+    
     γ = env.discount
     
     for sweep in 1:N_sweeps
+        sweep_start = time()
         Δ = 0.0
         shuffled_𝔅 = shuffle(𝔅)
         sim_times = Float64[]  # Track simulation times for this sweep
@@ -297,18 +620,42 @@ function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Fl
             best_Q = -Inf
             best_act = nothing
             
-            # Get all feasible actions
+            # Get all feasible actions with timing
+            action_start = time()
             action_set = all_pointings(agent_i, bp.clock, env)
+            action_time = time() - action_start
+            timing_stats[:total_action_set_gen] += action_time
+            operation_counts[:action_set_gen_calls] += 1
             
             for a in action_set
                 sum_Q = 0.0
                 
                 # Sequential particle simulation
                 for particle in 1:N_particles
-                    (r, τ′, b′, evolve_time) = simulate_one_step(copy(bp.clock), copy(bp.belief), a, 
+                    # Time belief copying
+                    copy_start = time()
+                    clock_copy = copy(bp.clock)
+                    belief_copy = deepcopy(bp.belief)
+                    copy_time = time() - copy_start
+                    timing_stats[:total_belief_copy] += copy_time
+                    operation_counts[:belief_copy_calls] += 1
+                    
+                    # Time simulate_one_step
+                    sim_start = time()
+                    (r, τ′, b′, evolve_time, timing_breakdown) = simulate_one_step(clock_copy, belief_copy, a, 
                                                     agent_i, get_other_agents(agent_i, env), env, gs_state)                    
-                    # Find nearest belief point
-                    nearest_bp = find_nearest_belief(BeliefPoint(τ′, b′), SLICE_BUCKET, DIGEST_LOOKUP)
+                    sim_time = time() - sim_start
+                    timing_stats[:total_simulate_one_step] += sim_time
+                    operation_counts[:simulate_one_step_calls] += 1
+                    
+                    # Time the nearest neighbor search
+                    nn_start = time()
+                    nearest_bp = find_nearest_belief_blas(BeliefPoint(τ′, b′), prep, SLICE_BUCKET, DIGEST_LOOKUP)
+                    nn_time = time() - nn_start
+                    @infiltrate
+                    timing_stats[:total_nearest_neighbor] += nn_time
+                    operation_counts[:nearest_neighbor_calls] += 1
+                    
                     v_next = VALUE[nearest_bp]
                     
                     sum_Q += r + γ * v_next
@@ -327,13 +674,21 @@ function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Fl
             POLICY[bp] = best_act
         end
         
-        println("  Sweep $(sweep): max change = $(round(Δ, digits=4))")
+        sweep_time = time() - sweep_start
+        println("  Sweep $(sweep): max change = $(round(Δ, digits=4)) in $(round(sweep_time, digits=2))s")
 
         
         if Δ < ε
             break
         end
     end
+    
+    # Print timing summary
+    println("\n📊 PBVI Timing Breakdown:")
+    println("• Simulate one step: $(round(timing_stats[:total_simulate_one_step] * 1000, digits=1)) ms ($(operation_counts[:simulate_one_step_calls]) calls)")
+    println("• Nearest neighbor search: $(round(timing_stats[:total_nearest_neighbor] * 1000, digits=1)) ms ($(operation_counts[:nearest_neighbor_calls]) calls)")
+    println("• Action set generation: $(round(timing_stats[:total_action_set_gen] * 1000, digits=1)) ms ($(operation_counts[:action_set_gen_calls]) calls)")
+    println("• Belief copying: $(round(timing_stats[:total_belief_copy] * 1000, digits=1)) ms ($(operation_counts[:belief_copy_calls]) calls)")
     
     return VALUE, POLICY
 end
@@ -569,11 +924,10 @@ end
     if fp !== nothing
         return fp
     end
-
     # 3. fall-back: cheapest distance inside the bucket
     nearest   = bucket[1]
     best_dist = belief_distance(target.belief, nearest.belief)
-    @inbounds for bp in bucket
+    for bp in bucket
         d = belief_distance(target.belief, bp.belief)
         if d < best_dist
             best_dist = d
@@ -585,7 +939,7 @@ end
 
 
 """
-Calculate distance between two beliefs using low-dimensional summary
+Calculate distance between two beliefs using KL divergence with caching
 """
 function belief_distance(b1::Belief, b2::Belief)
     # Use digest for fast comparison first
@@ -596,37 +950,131 @@ function belief_distance(b1::Belief, b2::Belief)
         return 0.0  # Exact match
     end
     
-    # Fallback to L1 distance on low-dimensional summary
-    # Create summary: vector of per-cell event probabilities
-    summary1 = belief_summary(b1)
-    summary2 = belief_summary(b2)
+    # Check distance cache (order-independent)
+    cache_key = digest1 < digest2 ? (digest1, digest2) : (digest2, digest1)
+    if haskey(DISTANCE_CACHE, cache_key)
+        DISTANCE_CACHE_STATS[:hits] += 1
+        return DISTANCE_CACHE[cache_key]
+    end
     
-    return sum(abs.(summary1 .- summary2))
+    # Cache miss - calculate KL divergence
+    DISTANCE_CACHE_STATS[:misses] += 1
+    distance = belief_distance_kl(b1, b2)
+    
+    # Store in cache (with size limit)
+    if DISTANCE_CACHE_STATS[:size] < 10000  # Larger limit for distances
+        DISTANCE_CACHE[cache_key] = distance
+        DISTANCE_CACHE_STATS[:size] += 1
+    end
+    
+    return distance
 end
 
 """
-Create low-dimensional summary of belief for distance calculation
+Calculate KL divergence between two beliefs using optimized summary method
 """
-function belief_summary(belief::Belief)
-    # Get dimensions from event_distributions array [state, y, x]
+function belief_distance_kl(b1::Belief, b2::Belief)
+    # Get belief summaries efficiently
+    summary1 = belief_summary_optimized(b1)
+    summary2 = belief_summary_optimized(b2)
+    
+    # Add small epsilon to avoid log(0) and ensure positivity
+    ε = 1e-10
+    summary1 = summary1 .+ ε
+    summary2 = summary2 .+ ε
+    
+    # Normalize to proper probabilities
+    summary1 = summary1 ./ sum(summary1)
+    summary2 = summary2 ./ sum(summary2)
+    
+    # Use optimized symmetric KL divergence from Types module
+    return symmetric_kl_divergence_fast(summary1, summary2)
+end
+
+"""
+Create optimized belief summary without allocations
+"""
+function belief_summary_optimized(belief::Belief)
     num_states, height, width = size(belief.event_distributions)
     
-    # Create summary: vector of event probabilities for each cell
-    summary = Float64[]
+    # Pre-allocate the summary array
+    summary = Vector{Float64}(undef, height * width)
+    idx = 1
     
-    for x in 1:width, y in 1:height
-        # Get event probability for this cell (sum over event states)
+    @inbounds for x in 1:width, y in 1:height
+        # Sum over event states (assuming state 2 is EVENT_PRESENT)
         event_prob = 0.0
         for state in 1:num_states
-            if state == 2  # Assuming state 2 is EVENT_PRESENT
+            if state == 2  # EVENT_PRESENT
                 event_prob += belief.event_distributions[state, y, x]
             end
         end
-        push!(summary, event_prob)
+        summary[idx] = event_prob
+        idx += 1
     end
     
     return summary
 end
+
+"""
+Test function to benchmark KL divergence performance
+"""
+function test_kl_performance(belief1::Belief, belief2::Belief, num_tests::Int=1000)
+    println("🧪 Testing KL divergence performance...")
+    
+    # Test current method
+    start_time = time()
+    for i in 1:num_tests
+        _ = belief_distance_kl(belief1, belief2)
+    end
+    current_time = time() - start_time
+    
+    println("📊 Current method: $(round(current_time * 1000, digits=2)) ms for $num_tests calls")
+    println("📊 Average time per call: $(round(current_time / num_tests * 1000, digits=4)) ms")
+    
+    return current_time
+end
+
+"""
+Test BLAS optimization performance
+"""
+function test_blas_performance(𝔅::Vector{BeliefPoint}, num_tests::Int=1000)
+    println("🧪 Testing BLAS optimization performance...")
+    
+    if isempty(𝔅)
+        println("❌ No beliefs to test")
+        return 0.0
+    end
+    
+    # Prepare candidates once
+    prep = prepare_kl_candidates(𝔅)
+    if prep === nothing
+        println("❌ Failed to prepare candidates")
+        return 0.0
+    end
+    
+    # Test BLAS method
+    target = 𝔅[1]  # Use first belief as target
+    start_time = time()
+    for i in 1:num_tests
+        _ = find_nearest_belief_blas(target, prep, Dict(), Dict())
+    end
+    blas_time = time() - start_time
+    
+    # Test original method
+    start_time = time()
+    for i in 1:num_tests
+        _ = find_nearest_belief(target, Dict(), Dict())
+    end
+    original_time = time() - start_time
+    
+    println("📊 BLAS method: $(round(blas_time * 1000, digits=2)) ms for $num_tests calls")
+    println("📊 Original method: $(round(original_time * 1000, digits=2)) ms for $num_tests calls")
+    println("📊 Speedup: $(round(original_time / blas_time, digits=2))x")
+    
+    return blas_time, original_time
+end
+
 
 """
 Find agent index in the clock vector
@@ -694,6 +1142,92 @@ function get_field_of_regard_at_position(agent, position, env)
         end
     end
     return fov_cells
+end
+
+# Reward function configuration - these will be set from main.jl
+# Default values if not set externally
+const DEFAULT_ENTROPY_WEIGHT = get(ENV, "ENTROPY_WEIGHT", 1.0)    # w_H: Weight for entropy reduction (coordination)
+const DEFAULT_VALUE_WEIGHT = get(ENV, "VALUE_WEIGHT", 0.5)        # w_F: Weight for state value (detection priority)
+const DEFAULT_INFORMATION_STATES = get(ENV, "INFORMATION_STATES", [1, 2])  # I_1: No event, I_2: Event
+const DEFAULT_STATE_VALUES = get(ENV, "STATE_VALUES", [0.1, 1.0])        # F_1: No event value, F_2: Event value
+
+"""
+Calculate sophisticated reward for sensing actions
+
+R = Σ[j∈U_t] [w_H·(H_prior(b_j) - H_post(b_j)) + w_F·E[F_I_j]]
+
+Where:
+- w_H: Weight for entropy reduction (inter-agent coordination)
+- w_F: Weight for state value (detection priority)
+- E[F_I_j]: Expected value of information state I_k under current belief
+
+Uses global configuration constants from main.jl
+"""
+function calculate_sophisticated_reward(belief::Belief, cell::Tuple{Int, Int})
+    
+    # 1. Entropy-based reward: w_H * (H_prior - H_post)
+    H_before = calculate_cell_entropy(belief, cell)
+    H_after = 0.0  # Simplified: assume perfect observation
+    entropy_reward = DEFAULT_ENTROPY_WEIGHT * (H_before - H_after)
+    
+    # 2. State value reward: w_F * E[F_I_j]
+    # Calculate expected value under current belief
+    event_prob = get_event_probability(belief, cell)
+    no_event_prob = 1.0 - event_prob
+    
+    # E[F_I_j] = Σ_k p(I_k) * F_k
+    expected_value = no_event_prob * DEFAULT_STATE_VALUES[1] + event_prob * DEFAULT_STATE_VALUES[2]
+    value_reward = DEFAULT_VALUE_WEIGHT * expected_value
+    
+    # Total reward for this cell
+    return entropy_reward + value_reward
+end
+
+"""
+Configure reward function weights
+
+Parameters:
+- w_H: Weight for entropy reduction (coordination). Default: 1.0
+- w_F: Weight for state value (detection priority). Default: 0.5
+
+Examples:
+- w_H=1.0, w_F=0.0: Pure entropy-based reward (original behavior)
+- w_H=0.5, w_F=1.0: Balanced coordination and detection
+- w_H=0.0, w_F=1.0: Pure value-based reward (detection-focused)
+"""
+function configure_reward_weights(; w_H::Float64=1.0, w_F::Float64=0.5)
+    global DEFAULT_ENTROPY_WEIGHT = w_H
+    global DEFAULT_VALUE_WEIGHT = w_F
+    
+    println("🎯 Reward weights configured:")
+    println("   • Entropy weight (w_H): $w_H (coordination)")
+    println("   • Value weight (w_F): $w_F (detection priority)")
+    
+    if w_H == 1.0 && w_F == 0.0
+        println("   → Pure entropy-based reward (original behavior)")
+    elseif w_H == 0.0 && w_F == 1.0
+        println("   → Pure value-based reward (detection-focused)")
+    else
+        println("   → Balanced reward function")
+    end
+end
+
+"""
+Set reward configuration from main.jl constants
+This function should be called from the main script to sync configuration
+"""
+function set_reward_config_from_main(entropy_weight::Float64, value_weight::Float64, 
+                                   information_states::Vector{Int}, state_values::Vector{Float64})
+    global DEFAULT_ENTROPY_WEIGHT = entropy_weight
+    global DEFAULT_VALUE_WEIGHT = value_weight
+    global DEFAULT_INFORMATION_STATES = information_states
+    global DEFAULT_STATE_VALUES = state_values
+    
+    println("🎯 Reward configuration synced from main.jl:")
+    println("   • Entropy weight (w_H): $entropy_weight")
+    println("   • Value weight (w_F): $value_weight")
+    println("   • Information states: $information_states")
+    println("   • State values: $state_values")
 end
 
 end # module 

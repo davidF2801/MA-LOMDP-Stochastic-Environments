@@ -194,6 +194,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("⏱️  Agent $(agent_id) prior-based planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :pbvi
                 println("🧠 Computing PBVI plan for agent $(agent_id)")
+                @infiltrate
                 new_plan, planning_time = MacroPlannerPBVI.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :pbvi
                 if agent.id == 2
@@ -300,9 +301,9 @@ function update_global_belief!(global_belief, observations::Vector{GridObservati
     
     println("  📊 t_clean = $(t_clean) (last time where all observation outcomes are known)")
     
-    # Step 2: Roll forward deterministically from uniform belief to t_clean using known observations
-    # Start with uniform belief distribution (we knew nothing at t=0)
-    B = initialize_uniform_belief(env)
+    # Step 2: Roll forward deterministically from prior belief to t_clean using known observations
+    # Start with prior-based belief distribution
+    B = initialize_global_belief(env)
     
     for t in 0:(t_clean-1)
         # Apply known observations (perfect observations)
@@ -403,13 +404,12 @@ end
 Initialize global belief
 """
 function initialize_global_belief(env; num_states::Int=2)
-    # Initialize with uniform distribution over event states using proper Belief type
+    # Initialize with prior distribution over event states using Types + prior-based planner logic
     # For 2-state model: [NO_EVENT, EVENT_PRESENT]
-    # For 4-state model: [NO_EVENT, EVENT_PRESENT, EVENT_SPREADING, EVENT_DECAYING]
+    # Build per-cell P(EVENT_PRESENT) prior using the same method as prior-based macro planner
+    prior_map = MacroPlannerPriorBased.calculate_prior_probability_map(env)
     
-    uniform_distribution = fill(1.0/num_states, num_states)
-    
-    return BeliefManagement.initialize_belief(env.width, env.height, uniform_distribution)
+    return BeliefManagement.initialize_belief_from_event_prior(prior_map)
 end
 
 """

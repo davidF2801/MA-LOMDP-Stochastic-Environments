@@ -21,7 +21,8 @@ export update_belief_state, initialize_belief, predict_belief_evolution_dbn,
        product, normalize_belief_distributions, collapse_belief_to, 
        enumerate_all_possible_outcomes, merge_equivalent_beliefs, beliefs_are_equivalent, calculate_cell_entropy,
        get_event_probability, clear_belief_evolution_cache!,
-       get_cache_stats
+       get_cache_stats,
+       initialize_belief_from_event_prior
 
 # Belief type is now defined in Types module
 
@@ -260,6 +261,30 @@ function initialize_belief(grid_width::Int, grid_height::Int, prior_distribution
     for y in 1:grid_height
         for x in 1:grid_width
             event_distributions[:, y, x] = prior_distribution
+        end
+    end
+    
+    uncertainty_map = calculate_uncertainty_map_from_distributions(event_distributions)
+    
+    return Belief(event_distributions, uncertainty_map, 0, [])
+end
+
+"""
+initialize_belief_from_event_prior(prior_event_prob::Matrix{Float64})
+Initialize a 2-state belief using a per-cell prior probability for EVENT_PRESENT.
+For each cell: [P(NO_EVENT), P(EVENT_PRESENT)] = [1 - p, p]
+"""
+function initialize_belief_from_event_prior(prior_event_prob::Matrix{Float64})
+    height, width = size(prior_event_prob)
+    num_states = 2
+    event_distributions = Array{Float64, 3}(undef, num_states, height, width)
+    
+    for y in 1:height
+        for x in 1:width
+            p = prior_event_prob[y, x]
+            p = max(0.0, min(1.0, p))
+            event_distributions[1, y, x] = 1.0 - p
+            event_distributions[2, y, x] = p
         end
     end
     

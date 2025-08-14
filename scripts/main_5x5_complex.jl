@@ -26,7 +26,7 @@ using Infiltrator
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 200            # Total simulation steps
+const NUM_STEPS = 20            # Total simulation steps
 const PLANNING_MODE = :sweep         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based)
 #const modes = [:pbvi, :prior_based, :random]
 const modes = [:pbvi, :prior_based, :random]
@@ -53,6 +53,12 @@ const CONTACT_HORIZON = 10             # Steps until next sync opportunity
 const GROUND_STATION_X = 2            # Ground station X position (center)
 const GROUND_STATION_Y = 1            # Ground station Y position (center)
 
+# 🎯 REWARD FUNCTION CONFIGURATION
+const ENTROPY_WEIGHT = 1.0            # w_H: Weight for entropy reduction (coordination)
+const VALUE_WEIGHT = 0.0              # w_F: Weight for state value (detection priority)
+const INFORMATION_STATES = [1, 2]     # I_1: No event, I_2: Event
+const STATE_VALUES = [0.1, 0.9]      # F_1: No event value, F_2: Event value
+
 # =============================================================================
 # HETEROGENEOUS RSP (Random Spread Process) MODEL PARAMETERS
 # =============================================================================
@@ -71,6 +77,10 @@ using .MyProject: EventDynamics, SpatialGrid
 using .MyProject.Agents.TrajectoryPlanner: get_position_at_time, execute_plan, create_complex_trajectory
 using .MyProject.Types: save_agent_actions_to_csv, calculate_and_save_ndd_metrics, EnhancedEventTracker, initialize_enhanced_event_tracker, update_enhanced_event_tracking!, mark_observed_events_with_time!, get_event_statistics, save_event_tracking_data, save_uncertainty_evolution_data, save_sync_event_data, create_observation_heatmap
 
+# Sync reward configuration with PBVI planner
+using .MyProject.Planners.GroundStation.MacroPlannerPBVI: set_reward_config_from_main
+set_reward_config_from_main(ENTROPY_WEIGHT, VALUE_WEIGHT, INFORMATION_STATES, STATE_VALUES)
+
 # Import specific modules
 using .Environment
 using .Environment: GridState
@@ -79,6 +89,7 @@ using .Planners.GroundStation
 using .Planners.MacroPlannerAsync
 using .Planners.PolicyTreePlanner
 using .Planners.MacroPlannerRandom
+# using .Agents.BeliefManagement: initialize_global_belief
 
 # Import RSP functions
 import .Environment.EventDynamicsModule: transition_rsp!
@@ -431,6 +442,46 @@ function create_rsp_animation(
     return anim
 end
 
+"""
+Create animation (GIF) of the belief P(Event Present) per cell over time
+"""
+function create_belief_event_animation(
+    belief_event_present_evolution::Vector{Matrix{Float64}},
+    results_dir::String="",
+    run_number::Int=1,
+    planning_mode::Symbol=:script
+)
+    println("\n🎬 Creating Belief Animation (P(Event Present))")
+    println("=============================================")
+
+    # Create animations directory path
+    animations_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "animations")
+    if !isdir(animations_dir)
+        mkpath(animations_dir)
+    end
+
+    # Build frames as heatmaps with fixed color limits [0, 1]
+    anim = @animate for (t, prob_map) in enumerate(belief_event_present_evolution)
+        heatmap(
+            prob_map;
+            title = "Belief P(Event) — t=$(t - 1)",
+            xlabel = "X Coordinate",
+            ylabel = "Y Coordinate",
+            aspect_ratio = :equal,
+            colorbar_title = "P(Event)",
+            c = :viridis,
+            clims = (0.0, 1.0),
+            size = (600, 600)
+        )
+    end
+
+    gif_filename = joinpath(animations_dir, "belief_event_present_$(GRID_WIDTH)x$(GRID_HEIGHT)_$(planning_mode)_run$(run_number).gif")
+    gif(anim, gif_filename, fps=1.5)
+    println("✓ Saved belief animation: $(basename(gif_filename))")
+
+    return anim
+end
+
 # =============================================================================
 # EVENT TRACKING STRUCTURES
 # =============================================================================
@@ -659,6 +710,8 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     # Track uncertainty evolution for visualization
     uncertainty_evolution = Matrix{Float64}[]
     average_uncertainty_per_timestep = Float64[]
+    # Track belief of EVENT_PRESENT per cell over time
+    belief_event_present_evolution = Matrix{Float64}[]
 
     # Get initial environment state from replay
     current_environment = get_replay_state(replay_env, 0)
@@ -744,7 +797,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
             t_clean = minimum([tau[j] for j in keys(tau)])
             
             # Roll forward deterministically from uniform belief to t_clean using known observations
-            B = initialize_uniform_belief(env)
+            B = GroundStation.initialize_global_belief(env)
             for t_roll in 0:(t_clean-1)
                 B = evolve_no_obs(B, env)  # Contagion-aware update
                 # Apply known observations (perfect observations)
@@ -769,11 +822,17 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
             push!(uncertainty_evolution, copy(gs_state.global_belief.uncertainty_map))
             avg_uncertainty = mean(gs_state.global_belief.uncertainty_map)
             push!(average_uncertainty_per_timestep, avg_uncertainty)
+            # Record P(EVENT_PRESENT) per cell
+            prob_map = copy(gs_state.global_belief.event_distributions[Int(EVENT_PRESENT) + 1, :, :])
+            push!(belief_event_present_evolution, prob_map)
         else
-            # If no global belief yet, use uniform uncertainty
-            uniform_uncertainty = fill(1, GRID_HEIGHT, GRID_WIDTH)  # log2(2) for uniform distribution
+            # If no global belief yet, use uniform values
+            uniform_uncertainty = fill(1, GRID_HEIGHT, GRID_WIDTH)
             push!(uncertainty_evolution, uniform_uncertainty)
             push!(average_uncertainty_per_timestep, 1)
+            # Uniform belief over 2 states → P(event)=0.5
+            uniform_prob = fill(0.5, GRID_HEIGHT, GRID_WIDTH)
+            push!(belief_event_present_evolution, uniform_prob)
         end
         
         # Update environment using replay (not POMDP transition)
@@ -823,7 +882,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     println("  Planning horizon: $(PLANNING_HORIZON)")
     println("  Dynamics: RSP (Replay)")
     
-    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history, event_tracker, uncertainty_evolution, average_uncertainty_per_timestep, ndd_life
+    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history, event_tracker, uncertainty_evolution, average_uncertainty_per_timestep, ndd_life, belief_event_present_evolution
 end
 
 # =============================================================================
@@ -864,11 +923,11 @@ for n in 1:N_RUNS
         create_environment_distribution_plot(replay_env.env.rsp_params, results_base_dir, n)
 
         # Run the simulation with replay
-        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, avg_uncertainty, ndd_life = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, mode)
+        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, uncertainty_avg, ndd_life, belief_event_present_evolution = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, mode)
 
         println("\n✅ RSP test completed!")
         println("📊 Final event observation percentage: $(round(percentage, digits=1))%")
-        println("📊 Final average uncertainty: $(round(avg_uncertainty[end], digits=3))") 
+        println("📊 Final average uncertainty: $(round(uncertainty_avg[end], digits=3))") 
         println("📊 Final Normalized Detection Delay (lifetime): $(round(ndd_life, digits=3))")
 
         # Print final status
@@ -901,7 +960,7 @@ for n in 1:N_RUNS
         ndd_actual_lifetime = Types.calculate_ndd_actual_lifetime(event_tracker, NUM_STEPS)
         
         # Save main performance metrics
-        save_performance_metrics(gs_state, avg_uncertainty, percentage, ndd_expected_lifetime, ndd_actual_lifetime, replay_env.env, agents, results_base_dir, n, PLANNING_MODE)
+        save_performance_metrics(gs_state, uncertainty_avg, percentage, ndd_expected_lifetime, ndd_actual_lifetime, replay_env.env, agents, results_base_dir, n, PLANNING_MODE)
         
         # Save agent actions to CSV
         Types.save_agent_actions_to_csv(action_history, results_base_dir, n, PLANNING_MODE, NUM_STEPS)
@@ -913,7 +972,7 @@ for n in 1:N_RUNS
         Types.save_event_tracking_data(event_tracker, results_base_dir, n, PLANNING_MODE)
         
         # Save uncertainty evolution data
-        Types.save_uncertainty_evolution_data(uncertainty_evolution, avg_uncertainty, results_base_dir, n, PLANNING_MODE)
+        Types.save_uncertainty_evolution_data(uncertainty_evolution, uncertainty_avg, results_base_dir, n, PLANNING_MODE)
         
         # Save sync event data
         Types.save_sync_event_data(sync_events, results_base_dir, n, PLANNING_MODE)
@@ -928,9 +987,12 @@ for n in 1:N_RUNS
         # Create simulation animation
         anim = create_rsp_animation(agents, NUM_STEPS, env_evolution, action_history, (GROUND_STATION_X, GROUND_STATION_Y), results_base_dir, n, PLANNING_MODE)
         
+        # Create belief animation for P(Event Present)
+        create_belief_event_animation(belief_event_present_evolution, results_base_dir, n, PLANNING_MODE)
+        
         println("\n✅ RSP simulation completed!")
         println("📁 Check the results folder for:")
-        println("  - Run $(n)/$(PLANNING_MODE)/animations/ (main simulation animation)")
+        println("  - Run $(n)/$(PLANNING_MODE)/animations/ (main simulation animation and belief animation)")
         println("  - Run $(n)/$(PLANNING_MODE)/metrics/ (performance metrics, agent actions, NDD metrics)")
         println("  - Run $(n)/environment/ (environment parameter distribution)")
     end

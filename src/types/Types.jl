@@ -1205,4 +1205,53 @@ end
 # Export the additional saving functions
 export save_event_tracking_data, save_uncertainty_evolution_data, save_sync_event_data
 
+# =============================================================================
+# High-Performance KL Divergence Functions
+# =============================================================================
+
+"""
+High-performance KL divergence implementation optimized for millions of calls
+"""
+@inline function kl_divergence_fast(p::AbstractVector{T}, q::AbstractVector{T}) where {T<:AbstractFloat}
+    s = zero(T)
+    @inbounds @simd for i in eachindex(p, q)
+        s += p[i] * (log(p[i]) - log(q[i]))
+    end
+    return s
+end
+
+"""
+Ultra-fast KL divergence for small fixed-size distributions (e.g., 2-state beliefs)
+"""
+@inline function kl_divergence_fast_2state(p::AbstractVector{T}, q::AbstractVector{T}) where {T<:AbstractFloat}
+    @inbounds begin
+        # Optimized for 2-state distributions (most common case)
+        if length(p) == 2 && length(q) == 2
+            return p[1] * (log(p[1]) - log(q[1])) + p[2] * (log(p[2]) - log(q[2]))
+        end
+        # Fallback to general case
+        return kl_divergence_fast(p, q)
+    end
+end
+
+"""
+Fast symmetric KL divergence for beliefs
+"""
+@inline function symmetric_kl_divergence_fast(p::AbstractVector{T}, q::AbstractVector{T}) where {T<:AbstractFloat}
+    # For small distributions, compute both directions efficiently
+    if length(p) <= 4  # Small distributions get special treatment
+        kl_forward = kl_divergence_fast_2state(p, q)
+        kl_backward = kl_divergence_fast_2state(q, p)
+        return 0.5 * (kl_forward + kl_backward)
+    else
+        # Larger distributions use the standard approach
+        kl_forward = kl_divergence_fast(p, q)
+        kl_backward = kl_divergence_fast(q, p)
+        return 0.5 * (kl_forward + kl_backward)
+    end
+end
+
+# Export KL divergence functions
+export kl_divergence_fast, kl_divergence_fast_2state, symmetric_kl_divergence_fast
+
 end # module Types 

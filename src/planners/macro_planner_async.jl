@@ -99,7 +99,7 @@ function generate_action_sequences(agent, env, C::Int, phase_offset::Int=0)
     # 1. Propagate agent trajectory for C timesteps
     trajectory_positions = Vector{Tuple{Int, Int}}()
     for t in 0:(C-1)
-        pos = get_position_at_time(agent.trajectory, t, phase_offset)
+        pos = get_position_at_time(agent.trajectory, t)
         push!(trajectory_positions, pos)
     end
     
@@ -270,7 +270,7 @@ function precompute_belief_branches(env, agent, gs_state)
     
     # Step 2: Roll forward deterministically from uniform belief to t_clean-1 using known observations
     # Start with uniform belief distribution (we knew nothing at t=0)
-    B = initialize_uniform_belief(env)
+    B = initialize_global_belief(env)
     for t in 0:(t_clean-1)
         # Apply known observations (perfect observations)
         for (agent_j, action_j) in get_known_observations_at_time(t, gs_state)
@@ -500,9 +500,9 @@ function generate_sub_plans(seq, C, env, belief_branches_vector, gs_state, t_sta
     
     agent = env.agents[missing_agent_id]
     timestep_actions = Dict{Int, SensingAction}()
-    phase_offset = t_start % agent.trajectory.period
+    phase_offset = mod(t_start, agent.trajectory.period)
     seq_length = t_end - t_start
-    action_sequences = generate_action_sequences(agent, env, seq_length, phase_offset)
+    action_sequences = generate_action_sequences(agent, env, seq_length)
     # Evaluate all possible action sequences
     best_sequence = SensingAction[]
     best_value = -Inf
