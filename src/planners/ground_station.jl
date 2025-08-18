@@ -194,12 +194,9 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("⏱️  Agent $(agent_id) prior-based planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :pbvi
                 println("🧠 Computing PBVI plan for agent $(agent_id)")
-                @infiltrate
                 new_plan, planning_time = MacroPlannerPBVI.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :pbvi
-                if agent.id == 2
-                    # Debug point for agent 2
-                end
+                
                 # Track planning time
                 push!(gs_state.planning_times[agent_id], planning_time)
                 gs_state.total_planning_time += planning_time
@@ -208,6 +205,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
             elseif planning_mode == :pbvi_policy_tree
                 println("🌳 Computing PBVI policy tree for agent $(agent_id)")
                 reactive_policy, planning_time, policy_tree = AsyncPBVIPolicyTree.best_policy_tree(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                @infiltrate
                 gs_state.agent_plan_types[agent_id] = :pbvi_policy_tree
                 
                 # Track planning time
@@ -636,6 +634,138 @@ function enumerate_trajectories_dfs!(trajectories::Vector{Tuple{Vector{EventMap}
             # Recursively enumerate from this next state
             enumerate_trajectories_dfs!(trajectories, next_map, new_weight, λmap, C, depth + 1, trajectory_with_current)
         end
+    end
+end
+
+"""
+Check if agent j senses at time t using their reactive policy (policy tree)
+"""
+function j_senses_at_time_policy_tree(j::Agent, t::Int, agent_j_obs_history::Vector{Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}})
+    # Check if agent j has a reactive policy
+    if j.reactive_policy === nothing
+        return false
+    end
+    
+    # Convert observation history to GridObservation format for the reactive policy
+    grid_observations = Vector{GridObservation}()
+    for (timestep, obs_symbols) in agent_j_obs_history
+        cells = Tuple{Int, Int}[]
+        event_states = EventState[]
+        for (cell, state) in obs_symbols
+            push!(cells, cell)
+            push!(event_states, state)
+        end
+        if !isempty(cells)
+            push!(grid_observations, GridObservation(j.id, cells, event_states, []))
+        end
+    end
+    
+    # Get action from agent j's reactive policy
+    action = j.reactive_policy(grid_observations, t)
+    return !isempty(action.target_cells)
+end
+
+"""
+Get scheduled cell for agent j at time t using their reactive policy (policy tree)
+"""
+function scheduled_cell_policy_tree(j::Agent, t::Int, agent_j_obs_history::Vector{Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}})
+    # Check if agent j has a reactive policy
+    if j.reactive_policy === nothing
+        return nothing
+    end
+    
+    # Convert observation history to GridObservation format for the reactive policy
+    grid_observations = Vector{GridObservation}()
+    for (timestep, obs_symbols) in agent_j_obs_history
+        cells = Tuple{Int, Int}[]
+        event_states = EventState[]
+        for (cell, state) in obs_symbols
+            push!(cells, cell)
+            push!(event_states, state)
+        end
+        if !isempty(cells)
+            push!(grid_observations, GridObservation(j.id, cells, event_states, []))
+        end
+    end
+    
+    # Get action from agent j's reactive policy
+    action = j.reactive_policy(grid_observations, t)
+    if !isempty(action.target_cells)
+        return action.target_cells[1]  # Return first cell
+    end
+    
+    return nothing
+end
+
+"""
+Check if agent j senses at time t using ground station plans (fallback for non-policy agents)
+"""
+function j_senses_at_time_gs_plan(j::Agent, t::Int, gs_state)
+    if !haskey(gs_state.agent_plans, j.id) || gs_state.agent_plans[j.id] === nothing
+        return false
+    end
+    
+    plan = gs_state.agent_plans[j.id]
+    plan_timestep = (t - gs_state.agent_last_sync[j.id]) + 1
+    
+    if 1 <= plan_timestep <= length(plan)
+        action = plan[plan_timestep]
+        return !isempty(action.target_cells)
+    end
+    
+    return false
+end
+
+"""
+Get scheduled cell for agent j at time t using ground station plans (fallback for non-policy agents)
+"""
+function scheduled_cell_gs_plan(j::Agent, t::Int, gs_state)
+    if !haskey(gs_state.agent_plans, j.id) || gs_state.agent_plans[j.id] === nothing
+        return nothing
+    end
+    
+    plan = gs_state.agent_plans[j.id]
+    plan_timestep = (t - gs_state.agent_last_sync[j.id]) + 1
+    
+    if 1 <= plan_timestep <= length(plan)
+        action = plan[plan_timestep]
+        if !isempty(action.target_cells)
+            return action.target_cells[1]  # Return first cell
+        end
+    end
+    
+    return nothing
+end
+
+"""
+Check if agent j senses at time t - unified function that handles both policy trees and ground station plans
+"""
+function j_senses_at_time(j::Agent, t::Int, gs_state, agent_j_obs_history::Vector{Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}} = Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}[])
+    # Check agent's plan type to determine which method to use
+    plan_type = get(gs_state.agent_plan_types, j.id, :script)
+    
+    if plan_type == :policy || plan_type == :pbvi_policy_tree
+        # Use policy tree method
+        return j_senses_at_time_policy_tree(j, t, agent_j_obs_history)
+    else
+        # Use ground station plan method
+        return j_senses_at_time_gs_plan(j, t, gs_state)
+    end
+end
+
+"""
+Get scheduled cell for agent j at time t - unified function that handles both policy trees and ground station plans
+"""
+function scheduled_cell(j::Agent, t::Int, gs_state, agent_j_obs_history::Vector{Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}} = Tuple{Int, Vector{Tuple{Tuple{Int, Int}, EventState}}}[])
+    # Check agent's plan type to determine which method to use
+    plan_type = get(gs_state.agent_plan_types, j.id, :script)
+    
+    if plan_type == :policy || plan_type == :pbvi_policy_tree
+        # Use policy tree method
+        return scheduled_cell_policy_tree(j, t, agent_j_obs_history)
+    else
+        # Use ground station plan method
+        return scheduled_cell_gs_plan(j, t, gs_state)
     end
 end
 

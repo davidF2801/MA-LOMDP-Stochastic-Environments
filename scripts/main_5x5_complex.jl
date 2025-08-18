@@ -26,11 +26,11 @@ using Infiltrator
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 20            # Total simulation steps
-const PLANNING_MODE = :sweep         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based)
+const NUM_STEPS = 100            # Total simulation steps (reduced for quick test)
+const PLANNING_MODE = :pbvi_policy_tree         # Test PBVI policy tree planning
 #const modes = [:pbvi, :prior_based, :random]
-const modes = [:pbvi, :prior_based, :random]
-const N_RUNS = 200
+const modes = [:prior_based, :random, :pbvi_1_0_0_0, :pbvi_0_5_0_5, :pbvi_0_0_1_0]  # Test only the policy tree mode
+const N_RUNS = 200  # Single run for quick test
 const MAX_BATTERY = 10000.0
 const CHARGING_RATE = 3.0
 const OBSERVATION_COST = 0.0
@@ -45,7 +45,7 @@ const MAX_PROB_MASS = 0.6            # Maximum probability mass to keep when pru
 
 # 🤖 AGENT PARAMETERS
 const NUM_AGENTS = 2                  # Number of agents (two agents with complex trajectories)
-const PLANNING_HORIZON = 10           # Planning horizon for macro-scripts (matches trajectory period)
+const PLANNING_HORIZON = 3           # Much smaller planning horizon for quick testing
 const SENSOR_NOISE = 0.0              # Perfect observations
 
 # 📡 COMMUNICATION PARAMETERS
@@ -54,8 +54,8 @@ const GROUND_STATION_X = 2            # Ground station X position (center)
 const GROUND_STATION_Y = 1            # Ground station Y position (center)
 
 # 🎯 REWARD FUNCTION CONFIGURATION
-const ENTROPY_WEIGHT = 1.0            # w_H: Weight for entropy reduction (coordination)
-const VALUE_WEIGHT = 0.0              # w_F: Weight for state value (detection priority)
+const ENTROPY_WEIGHT = 0.5            # w_H: Weight for entropy reduction (coordination)
+const VALUE_WEIGHT = 0.5              # w_F: Weight for state value (detection priority)
 const INFORMATION_STATES = [1, 2]     # I_1: No event, I_2: Event
 const STATE_VALUES = [0.1, 0.9]      # F_1: No event value, F_2: Event value
 
@@ -81,6 +81,10 @@ using .MyProject.Types: save_agent_actions_to_csv, calculate_and_save_ndd_metric
 using .MyProject.Planners.GroundStation.MacroPlannerPBVI: set_reward_config_from_main
 set_reward_config_from_main(ENTROPY_WEIGHT, VALUE_WEIGHT, INFORMATION_STATES, STATE_VALUES)
 
+# Sync reward configuration with Policy Tree planner
+using .MyProject.Planners.GroundStation.AsyncPBVIPolicyTree: set_reward_config_from_main as set_reward_config_policy_tree
+set_reward_config_policy_tree(ENTROPY_WEIGHT, VALUE_WEIGHT, INFORMATION_STATES, STATE_VALUES)
+
 # Import specific modules
 using .Environment
 using .Environment: GridState
@@ -89,6 +93,7 @@ using .Planners.GroundStation
 using .Planners.MacroPlannerAsync
 using .Planners.PolicyTreePlanner
 using .Planners.MacroPlannerRandom
+using .Planners.MacroPlannerGreedy
 # using .Agents.BeliefManagement: initialize_global_belief
 
 # Import RSP functions
@@ -905,13 +910,48 @@ for n in 1:N_RUNS
     replay_env = simulate_environment_once(NUM_STEPS)
     for mode in modes
         PLANNING_MODE = mode
+        
+        # Parse weight configuration from mode name if it's a parameterized PBVI mode
+        actual_planning_mode = mode
+        entropy_weight = ENTROPY_WEIGHT
+        value_weight = VALUE_WEIGHT
+        
+        mode_str = string(mode)
+        if startswith(mode_str, "pbvi_") && length(split(mode_str, "_")) >= 5
+            # Parse pbvi_wH_wV format: pbvi_0_2_0_8 -> wH=0.2, wV=0.8
+            parts = split(mode_str, "_")
+            if length(parts) == 5
+                actual_planning_mode = :pbvi
+                # Reconstruct decimal values: "0_2" -> "0.2"
+                wh_str = parts[2] * "." * parts[3]
+                wv_str = parts[4] * "." * parts[5]
+                entropy_weight = parse(Float64, wh_str)
+                value_weight = parse(Float64, wv_str)
+                
+                println("🎯 Parameterized PBVI mode detected:")
+                println("  Entropy weight (w_H): $(entropy_weight)")
+                println("  Value weight (w_F): $(value_weight)")
+                
+                # Update reward configuration for this run
+                using .MyProject.Planners.GroundStation.MacroPlannerPBVI: set_reward_config_from_main
+                set_reward_config_from_main(entropy_weight, value_weight, INFORMATION_STATES, STATE_VALUES)
+                
+                # Also update policy tree planner configuration
+                using .MyProject.Planners.GroundStation.AsyncPBVIPolicyTree: set_reward_config_from_main as set_reward_config_policy_tree
+                set_reward_config_policy_tree(entropy_weight, value_weight, INFORMATION_STATES, STATE_VALUES)
+            end
+        end
+        
         println("🎯 RSP 5x5 Complex Trajectory Test")
         println("==================================")
         println("Configuration:")
         println("  Grid: $(GRID_WIDTH)x$(GRID_HEIGHT)")
         println("  Agents: $(NUM_AGENTS) (complex trajectories)")
         println("  Planning horizon: $(PLANNING_HORIZON)")
-        println("  Planning mode: $(PLANNING_MODE)")
+        println("  Planning mode: $(actual_planning_mode)")
+        if actual_planning_mode == :pbvi
+            println("  Reward weights: w_H=$(entropy_weight), w_F=$(value_weight)")
+        end
         println("  Dynamics: Heterogeneous RSP (Replay)")
         println("  Cross-shaped sensor: true")
         println("  Run: $(n)/$(N_RUNS)")
@@ -923,7 +963,7 @@ for n in 1:N_RUNS
         create_environment_distribution_plot(replay_env.env.rsp_params, results_base_dir, n)
 
         # Run the simulation with replay
-        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, uncertainty_avg, ndd_life, belief_event_present_evolution = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, mode)
+        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, uncertainty_avg, ndd_life, belief_event_present_evolution = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, actual_planning_mode)
 
         println("\n✅ RSP test completed!")
         println("📊 Final event observation percentage: $(round(percentage, digits=1))%")

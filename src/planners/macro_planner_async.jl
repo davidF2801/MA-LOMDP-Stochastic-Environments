@@ -27,6 +27,7 @@ import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefMa
        ..Agents.BeliefManagement.calculate_cell_entropy, ..Agents.BeliefManagement.get_event_probability,
        ..Agents.BeliefManagement.clear_belief_evolution_cache!, ..Agents.BeliefManagement.get_cache_stats
 # Remove circular imports - these functions will be available through the environment
+import ..GroundStation: initialize_global_belief
 
 export best_script, calculate_macro_script_reward
 
@@ -268,9 +269,8 @@ function precompute_belief_branches(env, agent, gs_state)
         end
     end
     
-    # Step 2: Roll forward deterministically from uniform belief to t_clean-1 using known observations
-    # Start with uniform belief distribution (we knew nothing at t=0)
-    B = initialize_global_belief(env)
+    # Step 2: Roll forward deterministically from prior belief to t_clean-1 using known observations
+    B = initialize_uniform_belief(env)
     for t in 0:(t_clean-1)
         # Apply known observations (perfect observations)
         for (agent_j, action_j) in get_known_observations_at_time(t, gs_state)

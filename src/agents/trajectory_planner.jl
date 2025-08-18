@@ -272,9 +272,6 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
             # Use the reactive policy function directly
             # Pass the current time to the reactive policy
             planned_action = agent.reactive_policy(local_obs_history, current_time)
-            if agent.id == 2
-                @infiltrate
-            end
         else
             # Fallback to old policy tree method (only if plan is not nothing)
             if plan !== nothing

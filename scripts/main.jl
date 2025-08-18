@@ -24,10 +24,10 @@ using Infiltrator
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 150            # Total simulation steps
+const NUM_STEPS = 100            # Total simulation steps
 const PLANNING_MODE = :policy         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based, :pbvi)
-const modes = [:pbvi, :script, :macro_approx_095, :macro_approx_090, :macro_approx_085]
-#const modes = [:prior_based]
+#const modes = [:pbvi, :script, :macro_approx_095, :macro_approx_090, :macro_approx_085]
+const modes = [:macro_approx_090,:greedy, :pbvi, :script, :prior_based, :sweep, :random]
 const N_RUNS = 200
 const MAX_BATTERY = 10000.0
 const CHARGING_RATE = 3.0
@@ -68,7 +68,7 @@ const GROUND_STATION_Y = 1            # Ground station Y position
 
 # 🎯 REWARD FUNCTION CONFIGURATION
 const ENTROPY_WEIGHT = 1.0            # w_H: Weight for entropy reduction (coordination)
-const VALUE_WEIGHT = 0.5              # w_F: Weight for state value (detection priority)
+const VALUE_WEIGHT = 0.0             # w_F: Weight for state value (detection priority)
 const INFORMATION_STATES = [1, 2]     # I_1: No event, I_2: Event
 const STATE_VALUES = [0.1, 1.0]      # F_1: No event value, F_2: Event value
 
@@ -108,6 +108,10 @@ using .MyProject.Types: save_agent_actions_to_csv, calculate_and_save_ndd_metric
 # Sync reward configuration with PBVI planner
 using .MyProject.Planners.GroundStation.MacroPlannerPBVI: set_reward_config_from_main
 set_reward_config_from_main(ENTROPY_WEIGHT, VALUE_WEIGHT, INFORMATION_STATES, STATE_VALUES)
+
+# Sync reward configuration with Policy Tree planner
+using .MyProject.Planners.GroundStation.AsyncPBVIPolicyTree: set_reward_config_from_main as set_reward_config_policy_tree
+set_reward_config_policy_tree(ENTROPY_WEIGHT, VALUE_WEIGHT, INFORMATION_STATES, STATE_VALUES)
 
 # Import specific modules
 using .Environment

@@ -4,109 +4,72 @@ using POMDPs
 using POMDPTools
 using Random
 using LinearAlgebra
-using Infiltrator
+using Statistics
 using ..Types
-import ..Agents.BeliefManagement: sample_from_belief
+import ..Types: check_battery_feasible, simulate_battery_evolution
 # Import types from the parent module (Planners)
 import ..EventState, ..NO_EVENT, ..EVENT_PRESENT
-import ..EventState2, ..NO_EVENT_2, ..EVENT_PRESENT_2
-import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..ComplexTrajectory, ..RangeLimitedSensor, ..EventMap
+import ..Agent, ..SensingAction, ..GridObservation, ..CircularTrajectory, ..LinearTrajectory, ..ComplexTrajectory, ..RangeLimitedSensor
 # Import trajectory functions
 import ..Agents.TrajectoryPlanner.get_position_at_time
 # Import belief management functions
 import ..Agents.BeliefManagement
-import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
-       ..Agents.BeliefManagement.calculate_uncertainty_from_distribution, ..Agents.BeliefManagement.predict_belief_rsp,
-       ..Agents.BeliefManagement.evolve_no_obs, ..Agents.BeliefManagement.get_neighbor_beliefs,
-       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.product,
-       ..Agents.BeliefManagement.normalize_belief_distributions, ..Agents.BeliefManagement.collapse_belief_to,
-       ..Agents.BeliefManagement.enumerate_all_possible_outcomes, ..Agents.BeliefManagement.merge_equivalent_beliefs,
-       ..Agents.BeliefManagement.beliefs_are_equivalent, ..Agents.BeliefManagement.calculate_cell_entropy, 
-       ..Agents.BeliefManagement.get_event_probability, ..Agents.BeliefManagement.clear_belief_evolution_cache!, 
-       ..Agents.BeliefManagement.get_cache_stats
+import ..Agents.BeliefManagement.Belief, ..Agents.BeliefManagement.evolve_no_obs_fast, 
+       ..Agents.BeliefManagement.collapse_belief_to, ..Agents.BeliefManagement.calculate_cell_entropy, 
+       ..Agents.BeliefManagement.get_event_probability, ..Agents.BeliefManagement.enumerate_all_possible_outcomes
 
-export best_script, evaluate_action_sequence_exact, calculate_macro_script_reward
+export best_script
 
 """
 best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state)::Vector{SensingAction}
-  – Generate a greedy sequence for the agent
+  – Generate a simple greedy sequence for the agent
   – At each step, choose the action that maximizes entropy * event_probability
-  – Ignore other agents' actions (fully greedy)
+  – Much simpler than before - no complex branching or battery simulation
   – Return the greedy sequence
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG)
     # Start timing
     start_time = time()
     
-    # Generate greedy sequence
-    greedy_sequence = generate_greedy_sequence(agent, env, C, belief, gs_state)
+    # Generate simple greedy sequence
+    greedy_sequence = generate_simple_greedy_sequence(agent, env, C, belief)
     
     # End timing
     end_time = time()
     planning_time = end_time - start_time
     
-    println("✅ Greedy sequence generated in $(round(planning_time, digits=3)) seconds")
+    println("✅ Simple greedy sequence generated in $(round(planning_time, digits=3)) seconds")
     
     return greedy_sequence, planning_time
 end
 
 """
-Generate a greedy sequence for the agent with observation branching and battery constraints
+Generate a simple greedy sequence for the agent - much faster than before
 """
-function generate_greedy_sequence(agent, env, C::Int, belief::Belief, gs_state)
+function generate_simple_greedy_sequence(agent, env, C::Int, belief::Belief)
     if C == 0
         return SensingAction[]
     end
     
     greedy_sequence = SensingAction[]
-    
-    # Start with the updated ground station belief (after incorporating agent observations)
-    current_belief_branches = [(deepcopy(belief), 1.0)]
-    
-    # Track battery evolution
-    current_battery = agent.battery_level
+    current_belief = deepcopy(belief)
     
     for t in 1:C
-        # Get agent's position at this timestep (t-1 because we're planning for timesteps 1 to C)
+        # Get agent's position at this timestep
         agent_pos = get_position_at_time(agent.trajectory, t-1, agent.phase_offset)
-        agent_row = agent_pos[2]
-        # Get available cells in the agent's current row
-        available_cells = Tuple{Int, Int}[]
-        for col in 1:env.width
-            push!(available_cells, (col, agent_row))
-        end
         
-        # Calculate greedy value for each cell by branching over observation outcomes
+        # Get available cells based on sensor pattern
+        available_cells = get_field_of_regard_at_position(agent, agent_pos, env)
+        
+        # Find the best cell greedily
         best_cell = nothing
         best_value = -Inf
         
         for cell in available_cells
-            # Check battery feasibility for this cell
-            action = SensingAction(agent.id, [cell], false)
-            if !check_battery_feasible(agent, action, current_battery)
-                continue  # Skip this cell if not battery feasible
-            end
-            
-            # Calculate expected entropy for this cell by branching over observation outcomes
-            expected_entropy = 0.0
-            
-            for (belief_branch, prob_branch) in current_belief_branches
-                # Calculate entropy for this cell in this belief branch
-                entropy = calculate_cell_entropy(belief_branch, cell)
-                
-                # Weight by the probability of this belief branch
-                expected_entropy += prob_branch * entropy
-            end
-            
-            # Calculate expected event probability for this cell
-            expected_event_prob = 0.0
-            for (belief_branch, prob_branch) in current_belief_branches
-                event_prob = get_event_probability(belief_branch, cell)
-                expected_event_prob += prob_branch * event_prob
-            end
-            
-            # Greedy value: expected entropy * expected event probability
-            greedy_value = expected_entropy * expected_event_prob
+            # Simple greedy value: entropy * event probability
+            entropy = calculate_cell_entropy(current_belief, cell)
+            event_prob = get_event_probability(current_belief, cell)
+            greedy_value = entropy * event_prob
             
             if greedy_value > best_value
                 best_value = greedy_value
@@ -114,84 +77,30 @@ function generate_greedy_sequence(agent, env, C::Int, belief::Belief, gs_state)
             end
         end
         
-        # Create action for the best cell
-        if best_cell !== nothing
+        # Create action for the best cell (or wait if none found)
+        if best_cell !== nothing && best_value > 0.0
             action = SensingAction(agent.id, [best_cell], false)
             push!(greedy_sequence, action)
             
-            # Update battery level
-            current_battery = simulate_battery_evolution(agent, action, current_battery)
-            
-            # Branch over observation outcomes for the selected action
-            new_belief_branches = Vector{Tuple{Belief, Float64}}()
-            
-            for (belief_branch, prob_branch) in current_belief_branches
-                # Create observation set for this action
-                obs_set = [(agent.id, action)]
-                
-                # Branch over all possible observation outcomes
-                for (observation_combo, probability) in enumerate_all_possible_outcomes(belief_branch, obs_set)
-                    B_new = deepcopy(belief_branch)
-                    
-                    # Apply the observation
-                    for (obs_cell, observed_state) in observation_combo
-                        B_new = collapse_belief_to(B_new, obs_cell, observed_state)
-                    end
-                    
-                    # Evolve belief for next timestep
-                    B_next = evolve_no_obs(B_new, env)
-                    
-                    # Add to new branches with combined probability
-                    push!(new_belief_branches, (B_next, prob_branch * probability))
-                end
-            end
-            
-            # Merge equivalent beliefs and update current branches
-            current_belief_branches = merge_equivalent_beliefs(new_belief_branches)
-            
+            # Update belief with expected observation (assume EVENT_PRESENT for simplicity)
+            current_belief = collapse_belief_to(current_belief, best_cell, EVENT_PRESENT)
         else
-            # Fallback to wait action if no good cell found or no battery feasible cells
+            # Wait action
             action = SensingAction(agent.id, Tuple{Int, Int}[], false)
             push!(greedy_sequence, action)
-            
-            # Update battery level (charging only)
-            current_battery = simulate_battery_evolution(agent, action, current_battery)
-            
-            # Just evolve all belief branches without observations
-            new_belief_branches = Vector{Tuple{Belief, Float64}}()
-            for (belief_branch, prob_branch) in current_belief_branches
-                B_next = evolve_no_obs(belief_branch, env)
-                push!(new_belief_branches, (B_next, prob_branch))
-            end
-            current_belief_branches = new_belief_branches
         end
+        
+        # Evolve belief for next timestep
+        current_belief = evolve_no_obs_fast(current_belief, env, calculate_uncertainty=false)
     end
     
-    println("🔄 Generated greedy sequence with observation branching and battery constraints for agent $(agent.id):")
-    println("  Agent trajectory: starts in row $(get_position_at_time(agent.trajectory, 0, agent.phase_offset)[2])")
+    println("🔄 Generated simple greedy sequence for agent $(agent.id):")
+    println("  Agent position: starts at $(get_position_at_time(agent.trajectory, 0, agent.phase_offset))")
     println("  Sequence: $(length(greedy_sequence)) actions")
-    println("  Final belief branches: $(length(current_belief_branches))")
-    println("  Final battery level: $(round(current_battery, digits=2))")
+    sensing_actions = count(a -> !isempty(a.target_cells), greedy_sequence)
+    println("  Sensing actions: $(sensing_actions)/$(length(greedy_sequence))")
     
     return greedy_sequence
-end
-
-"""
-Evaluate a greedy sequence (simplified - just return a fixed value since greedy is deterministic)
-"""
-function evaluate_action_sequence_exact(env, belief₀, agent, seq, other_scripts, C, gs_state, rng::AbstractRNG)
-    # For greedy strategy, we don't need complex evaluation
-    # Just return a fixed value since the sequence is deterministic
-    return 1.0
-end
-
-"""
-Calculate reward for greedy sequence (simplified)
-"""
-function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts, C::Int, env, agent, B_branches, gs_state)
-    # For greedy strategy, return a simple reward based on sequence length
-    # This is a baseline, so we use a simple heuristic
-    return length(seq) * 0.1  # Simple reward proportional to sequence length
 end
 
 """
