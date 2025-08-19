@@ -56,7 +56,7 @@ function generate_simple_greedy_sequence(agent, env, C::Int, belief::Belief)
     
     for t in 1:C
         # Get agent's position at this timestep
-        agent_pos = get_position_at_time(agent.trajectory, t-1, agent.phase_offset)
+        agent_pos = get_position_at_time(agent.trajectory, t-1)
         
         # Get available cells based on sensor pattern
         available_cells = get_field_of_regard_at_position(agent, agent_pos, env)
@@ -95,7 +95,7 @@ function generate_simple_greedy_sequence(agent, env, C::Int, belief::Belief)
     end
     
     println("🔄 Generated simple greedy sequence for agent $(agent.id):")
-    println("  Agent position: starts at $(get_position_at_time(agent.trajectory, 0, agent.phase_offset))")
+    println("  Agent position: starts at $(get_position_at_time(agent.trajectory, 0))")
     println("  Sequence: $(length(greedy_sequence)) actions")
     sensing_actions = count(a -> !isempty(a.target_cells), greedy_sequence)
     println("  Sensing actions: $(sensing_actions)/$(length(greedy_sequence))")

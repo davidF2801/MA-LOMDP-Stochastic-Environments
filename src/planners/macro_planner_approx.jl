@@ -100,7 +100,7 @@ function generate_action_sequences(agent, env, C::Int, phase_offset::Int=0)
     # 1. Propagate agent trajectory for C timesteps
     trajectory_positions = Vector{Tuple{Int, Int}}()
     for t in 0:(C-1)
-        pos = get_position_at_time(agent.trajectory, t, phase_offset)
+        pos = get_position_at_time(agent.trajectory, t)
         push!(trajectory_positions, pos)
     end
     
@@ -295,14 +295,14 @@ function precompute_belief_branches(env, agent, gs_state)
                 if has_known_observation(t, cell, gs_state)
                     observed_value = get_known_observation(t, cell, gs_state)
                     if t_clean >10
-                        @infiltrate
+                        
                     end
                     B = collapse_belief_to(B, cell, observed_value)
                 end
             end
         end
         if t_clean >10
-            @infiltrate
+            
         end
         B = evolve_no_obs(B, env)  # Contagion-aware update
     end
@@ -473,7 +473,7 @@ function branch_pruning(branches::Vector{Tuple{Belief, Float64}}, env, agent, gs
             @warn "Discarded more than allowed: $(actual_discarded) > $(max_discard_prob)"
         end
         # if length(normalized_branches) < length(branches) && length(normalized_branches) > 3
-        #     @infiltrate
+        #     
         # end
         return normalized_branches
     else
@@ -561,7 +561,7 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
             # The generator expression for 'all' must be parenthesized, and 'length' is misspelled as 'lenth'.
             # The correct form is:
             # if all(action.target_cells != Tuple{Int,Int}[] for action in seq) && length(prior_branches) < length(new_branches)
-            #     @infiltrate
+            #     
             # end
             B_post[t_global + 1] = merge_equivalent_beliefs(new_branches)
         # Step 6.2: Compute expected reward at time t_global
@@ -577,7 +577,7 @@ function generate_sub_plans(seq, C, env, belief_branches_vector, gs_state, t_sta
     
     agent = env.agents[missing_agent_id]
     timestep_actions = Dict{Int, SensingAction}()
-    phase_offset = t_start % agent.trajectory.period
+    phase_offset = mod(t_start, agent.trajectory.period)
     seq_length = t_end - t_start
     action_sequences = generate_action_sequences(agent, env, seq_length, phase_offset)
     # Evaluate all possible action sequences

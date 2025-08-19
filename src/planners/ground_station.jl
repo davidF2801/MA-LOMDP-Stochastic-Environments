@@ -205,7 +205,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
             elseif planning_mode == :pbvi_policy_tree
                 println("🌳 Computing PBVI policy tree for agent $(agent_id)")
                 reactive_policy, planning_time, policy_tree = AsyncPBVIPolicyTree.best_policy_tree(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
-                @infiltrate
+                
                 gs_state.agent_plan_types[agent_id] = :pbvi_policy_tree
                 
                 # Track planning time

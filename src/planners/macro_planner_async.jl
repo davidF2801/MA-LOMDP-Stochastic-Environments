@@ -468,7 +468,7 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                     B_next = evolve_no_obs(B_new, env)
                     push!(new_branches, (B_next, p_branch * probability))
                     if sum(p_branch for (_, p_branch) in new_branches)>1.1
-                        @infiltrate
+                        
                     end
                 end
             else
@@ -482,13 +482,13 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
         # Check that probability branches sum to 1.0
         total_prob = sum(p_branch for (_, p_branch) in B_post[t_global + 1])        
         if abs(total_prob-1.0) > 1e-6
-            @infiltrate
+            
         end
         # Step 6.2: Compute expected reward at time t_global
         R_seq[k] = compute_expected_reward(B_post[t_global], a_i, c_obs)
     end
     if agent.id == 1 && gs_state.time_step == 4
-        @infiltrate
+        
     end
     # Step 7: Return total discounted reward
     return sum((γ^(k-1)) * R_seq[k] for k in 1:length(seq))

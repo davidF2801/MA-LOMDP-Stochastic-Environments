@@ -376,9 +376,9 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     # Run PBVI
     VALUE, POLICY = pbvi(𝔅, N_particles, N_sweeps, ε, agent_i, env, gs_state)
     # Extract best sequence from policy
-    @infiltrate
+    
     best_sequence = extract_best_sequence(POLICY, VALUE, 𝔅, agent_i, env, gs_state, H)
-    @infiltrate
+    
     # End timing
     end_time = time()
     planning_time = end_time - start_time
@@ -480,7 +480,7 @@ function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::Sensi
     time_calc_start = time()
     agent_i_index = find_agent_index(agent_i, env)
     # if agent_i_index == 2
-    #     @infiltrate
+    #     
     # end
     if agent_i_index === nothing
         t_global = gs_state.time_step  # Fallback
@@ -528,7 +528,7 @@ function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::Sensi
     timing_breakdown[:clock_update] = time() - clock_start
     
     # if agent_i_index == 2
-    #     @infiltrate
+    #     
     # end
     return (r_step, τ_clock, b_sys, evolve_time, timing_breakdown)
 end
@@ -722,7 +722,7 @@ function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::
     end
     current_clock = ClockVector(current_phases)
     if agent_i.id == 2
-        @infiltrate
+        
     end
     candidate_bps = BeliefPoint[]
     
@@ -960,7 +960,7 @@ function random_pointing(agent::Agent, τ_clock::ClockVector, env)
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     # if agent.id == 2
-    #     @infiltrate
+    #     
     # end
     # Create action set: wait action + pointing actions
     actions = SensingAction[]
@@ -994,7 +994,7 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     # if agent.id == 2
-    #     @infiltrate
+    #     
     # end
     # Add wait action
     push!(actions, SensingAction(agent.id, Tuple{Int, Int}[], false))
@@ -1368,14 +1368,14 @@ end # module
 #     println("🔄 Building belief set for PBVI...")
 #     # Build belief set
 #     𝔅 = build_belief_set(B_clean, agent_i, τ_i, agents_j, τ_js_vector, H, env, gs_state, N_seed)
-#     @infiltrate
+#     
 #     println("🔄 Running PBVI with $(length(𝔅)) belief points...")
 #     # Run PBVI
 #     VALUE, POLICY = pbvi(𝔅, N_particles, N_sweeps, ε, agent_i, env, gs_state)
-#     @infiltrate
+#     
 #     # Extract best sequence from policy
 #     best_sequence = extract_best_sequence(POLICY, VALUE, 𝔅, agent_i, env, gs_state, H)
-#     @infiltrate
+#     
 #     # End timing
 #     end_time = time()
 #     planning_time = end_time - start_time
@@ -1462,7 +1462,7 @@ end # module
 #     # Calculate global time from agent_i's phase in the clock vector
 #     agent_i_index = find_agent_index(agent_i, env)
 #     # if agent_i_index == 2
-#     #     @infiltrate
+#     #     
 #     # end
 #     if agent_i_index === nothing
 #         t_global = gs_state.time_step  # Fallback
@@ -1499,7 +1499,7 @@ end # module
 #     evolve_time = time() - evolve_start
 #     τ_clock = advance_clock_vector(τ_clock, [agent_i; agents_j])
 #     # if agent_i_index == 2
-#     #     @infiltrate
+#     #     
 #     # end
 #     return (r_step, τ_clock, b_sys, evolve_time)
 # end
@@ -1645,7 +1645,7 @@ end # module
 #     end
 #     current_clock = ClockVector(current_phases)
 #     if agent_i.id == 2
-#         @infiltrate
+#         
 #     end
 #     candidate_bps = BeliefPoint[]
     
@@ -1819,7 +1819,7 @@ end # module
 #     # Get available cells in field of view
 #     available_cells = get_field_of_regard_at_position(agent, pos, env)
 #     # if agent.id == 2
-#     #     @infiltrate
+#     #     
 #     # end
 #     # Create action set: wait action + pointing actions
 #     actions = SensingAction[]
@@ -1853,7 +1853,7 @@ end # module
 #     # Get available cells in field of view
 #     available_cells = get_field_of_regard_at_position(agent, pos, env)
 #     # if agent.id == 2
-#     #     @infiltrate
+#     #     
 #     # end
 #     # Add wait action
 #     push!(actions, SensingAction(agent.id, Tuple{Int, Int}[], false))

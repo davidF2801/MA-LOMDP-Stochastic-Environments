@@ -570,7 +570,7 @@ function simulate_async_centralized_planning(num_steps::Int=NUM_STEPS; planning_
         for agent in agents
             # Get plan from ground station and execute it
             plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
-            action = execute_plan(agent, plan, plan_type, agent.observation_history)
+            action = execute_plan(agent, plan, plan_type, agent.observation_history, t)
             push!(joint_actions, action)
             
             # Use POMDP interface to get observations

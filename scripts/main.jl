@@ -27,7 +27,7 @@ using Infiltrator
 const NUM_STEPS = 100            # Total simulation steps
 const PLANNING_MODE = :policy         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based, :pbvi)
 #const modes = [:pbvi, :script, :macro_approx_095, :macro_approx_090, :macro_approx_085]
-const modes = [:macro_approx_090,:greedy, :pbvi, :script, :prior_based, :sweep, :random]
+const modes = [:macro_approx_090,:greedy, :pbvi, :prior_based, :sweep, :random, :script]
 const N_RUNS = 200
 const MAX_BATTERY = 10000.0
 const CHARGING_RATE = 3.0
@@ -1203,7 +1203,7 @@ for n in 1:N_RUNS
             end
             max_prob_mass = parse(Float64, prob_mass_str)
         end
-        @infiltrate
+        
         
         println("🎯 RSP 3x2 Row Visibility Test")
         println("==============================")
