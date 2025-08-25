@@ -194,7 +194,7 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("⏱️  Agent $(agent_id) prior-based planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :pbvi
                 println("🧠 Computing PBVI plan for agent $(agent_id)")
-                @infiltrate
+                
                 new_plan, planning_time = MacroPlannerPBVI.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :pbvi
                 
@@ -246,7 +246,7 @@ Check if agent is in range for synchronization
 function in_range(agent, t::Int, env, ground_station_pos)
     # Get agent's current position with phase offset
     current_pos = get_position_at_time(agent.trajectory, t, agent.phase_offset)
-    @infiltrate
+    
     # Use the provided ground station position
     return current_pos == ground_station_pos
 end

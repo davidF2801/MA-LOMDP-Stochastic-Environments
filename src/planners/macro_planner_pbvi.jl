@@ -378,7 +378,7 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     # Extract best sequence from policy
     
     best_sequence = extract_best_sequence(POLICY, VALUE, 𝔅, agent_i, env, gs_state, H)
-    @infiltrate
+    
     # End timing
     end_time = time()
     planning_time = end_time - start_time
@@ -720,7 +720,7 @@ function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::
             push!(current_phases, relative_offset)
         end
     end
-    @infiltrate
+    
     current_clock = ClockVector(current_phases)
     if agent_i.id == 2
         
