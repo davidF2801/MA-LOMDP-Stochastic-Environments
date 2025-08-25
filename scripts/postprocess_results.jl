@@ -30,8 +30,8 @@ println("📊 Starting postprocessing analysis...")
 
 # Multiple results directories to analyze - add as many as needed
 TARGET_RUNS = [
-    "run_2025-08-17T14-08-17-424",
-    #"run_2025-08-16T16-52-42-231",
+    #"run_2025-08-17T14-08-17-424",
+    "run_2025-08-16T16-52-42-231",
     # Add more run directories here as needed
     # "run_2025-08-16T16-52-26-473",
     # "run_2025-08-16T16-52-42-231",
@@ -41,13 +41,13 @@ TARGET_RUNS = [
 OUTPUT_DIR = joinpath("..", "results", TARGET_RUNS[1])
 
 # Performance metrics to analyze
-METRICS = [:event_observation_percentage, :ndd_expected, :ndd_actual, :final_uncertainty]
+METRICS = [:event_observation_percentage, :ndd_expected, :final_uncertainty, :average_planning_time]
 
 # Planning modes to compare
 #PLANNING_MODES = [:sweep, :script, :random]
-#PLANNING_MODES = [:script, :pbvi, :macro_approx_090, :prior_based, :sweep, :greedy, :random]
+PLANNING_MODES = [:script, :pbvi, :macro_approx_090, :prior_based, :sweep, :greedy, :random]
 #PLANNING_MODES = [:script, :pbvi, :prior_based, :random]
-PLANNING_MODES = [:pbvi_0_0_1_0, :pbvi_0_5_0_5, :pbvi_1_0_0_0, :prior_based, :random]
+#PLANNING_MODES = [:pbvi_0_0_1_0, :pbvi_0_5_0_5, :pbvi_1_0_0_0, :prior_based, :random]
 
 # Function to get display name for planning modes
 function get_mode_display_name(mode::Symbol)
@@ -103,6 +103,7 @@ function extract_metrics_from_file(filepath::String)
         open(filepath, "r") do file
             lines = readlines(file)
             in_performance_section = false
+            in_planning_section = false
             
             for line in lines
                 line = strip(line)
@@ -142,6 +143,27 @@ function extract_metrics_from_file(filepath::String)
                         value_str = split(line, ":")[end]
                         value = parse(Float64, strip(value_str))
                         metrics[:final_uncertainty] = value
+                    end
+                end
+                
+                # Check if we're entering the PLANNING TIME STATISTICS section
+                if line == "PLANNING TIME STATISTICS:"
+                    in_planning_section = true
+                    continue
+                end
+                
+                # Exit if we hit the next section
+                if in_planning_section && (line == "PERFORMANCE METRICS:" || line == "============================================================")
+                    in_planning_section = false
+                end
+                
+                if in_planning_section
+                    # Extract average planning time per plan
+                    if contains(line, "Average planning time per plan:")
+                        value_str = split(line, ":")[end]
+                        value_str = strip(replace(value_str, "seconds" => ""))
+                        value = parse(Float64, strip(value_str))
+                        metrics[:average_planning_time] = value
                     end
                 end
             end
@@ -449,6 +471,8 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
             "NDD (Actual Lifetime)"
         elseif metric == :final_uncertainty
             "Final Uncertainty"
+        elseif metric == :average_planning_time
+            "Average Planning Time (seconds)"
         else
             replace(string(metric), "_" => " ") |> titlecase
         end
@@ -730,6 +754,8 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
                 "NDD (Actual Lifetime)"
             elseif metric == :final_uncertainty
                 "Final Uncertainty"
+            elseif metric == :average_planning_time
+                "Average Planning Time (seconds)"
             else
                 replace(string(metric), "_" => " ") |> titlecase
             end
@@ -825,15 +851,12 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
         end
     end
     
-    # Create subplots
-    p1 = plot()
-    p2 = plot()
-    p3 = plot()
-    p4 = plot()
+    # Create dynamic number of subplots based on number of metrics
+    plots = [plot() for _ in 1:length(METRICS)]
     
     # Add boxplots for each metric
     for (i, metric) in enumerate(METRICS)
-        p = i == 1 ? p1 : i == 2 ? p2 : i == 3 ? p3 : p4
+        p = plots[i]
         
         # Add boxplots for each mode
         for (j, mode) in enumerate(PLANNING_MODES)
@@ -854,6 +877,8 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
             "NDD (Actual Lifetime)"
         elseif metric == :final_uncertainty
             "Final Uncertainty"
+        elseif metric == :average_planning_time
+            "Average Planning Time (seconds)"
         else
             replace(string(metric), "_" => " ") |> titlecase
         end
@@ -870,10 +895,36 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
             bottom_margin=10Plots.mm)
     end
     
-    # Combine plots
-    combined_plot = plot(p1, p2, p3, p4, 
-        layout=(2,2), 
-        size=(1200, 800))
+    # Combine plots with dynamic layout
+    num_metrics = length(METRICS)
+    
+    # Determine optimal layout based on number of metrics
+    if num_metrics == 1
+        layout = (1, 1)
+        plot_size = (600, 400)
+    elseif num_metrics == 2
+        layout = (1, 2)
+        plot_size = (1200, 400)
+    elseif num_metrics == 3
+        layout = (1, 3)
+        plot_size = (1800, 400)
+    elseif num_metrics == 4
+        layout = (2, 2)
+        plot_size = (1200, 800)
+    elseif num_metrics <= 6
+        layout = (2, 3)
+        plot_size = (1800, 800)
+    else
+        # For more than 6 metrics, use a grid layout
+        cols = ceil(Int, sqrt(num_metrics))
+        rows = ceil(Int, num_metrics / cols)
+        layout = (rows, cols)
+        plot_size = (300 * cols, 300 * rows)
+    end
+    
+    combined_plot = plot(plots..., 
+        layout=layout, 
+        size=plot_size)
     
     # Save plot
     plot_filename = joinpath(output_dir, "combined_comparison.png")

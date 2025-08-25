@@ -354,7 +354,7 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state):
   – Return the best sequence
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=30, N_particles::Int=64, N_sweeps::Int=50, ε::Float64=0.1)
+                    N_seed::Int=3, N_particles::Int=64, N_sweeps::Int=5, ε::Float64=0.1)
     # Start timing
     start_time = time()
     
@@ -378,7 +378,7 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     # Extract best sequence from policy
     
     best_sequence = extract_best_sequence(POLICY, VALUE, 𝔅, agent_i, env, gs_state, H)
-    
+    @infiltrate
     # End timing
     end_time = time()
     planning_time = end_time - start_time
@@ -720,6 +720,7 @@ function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::
             push!(current_phases, relative_offset)
         end
     end
+    @infiltrate
     current_clock = ClockVector(current_phases)
     if agent_i.id == 2
         
@@ -763,7 +764,7 @@ function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::
             # We need to find a belief point that represents the next state
             next_phases = Int[]
             for (i, agent) in enumerate([agent_i; get_other_agents(agent_i, env)])
-                next_phase = (current_bp.clock.phases[i] + 1) % agent.trajectory.period
+                next_phase = mod((current_bp.clock.phases[i] + 1), agent.trajectory.period)
                 push!(next_phases, next_phase)
             end
             next_clock = ClockVector(next_phases)
@@ -955,6 +956,8 @@ function random_pointing(agent::Agent, τ_clock::ClockVector, env)
         return SensingAction(agent.id, Tuple{Int, Int}[], false)
     end
     phase = τ_clock.phases[agent_index]
+    
+    # Get position - should work for all trajectory types with just phase
     pos = get_position_at_time(agent.trajectory, phase)
     
     # Get available cells in field of view
@@ -990,7 +993,10 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
         return [SensingAction(agent.id, Tuple{Int, Int}[], false)]
     end
     phase = τ_clock.phases[agent_index]
+    
+    # Get position - should work for all trajectory types with just phase
     pos = get_position_at_time(agent.trajectory, phase)
+    
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     # if agent.id == 2
@@ -1159,6 +1165,15 @@ function get_field_of_regard_at_position(agent, position, env)
                 if (dx == 0 && dy == 0) || (dx == 0 && dy != 0) || (dx != 0 && dy == 0)
                     push!(fov_cells, (nx, ny))
                 end
+            end
+        end
+    elseif agent.sensor.pattern == :circular
+        # Circular sensor: agent's position and all 8 adjacent cells (9-cell pattern)
+        # This is for the 9x9 grid circular trajectory agents
+        for dx in -1:1, dy in -1:1
+            nx, ny = x + dx, y + dy
+            if 1 <= nx <= env.width && 1 <= ny <= env.height
+                push!(fov_cells, (nx, ny))
             end
         end
     elseif agent.sensor.pattern == :row_only || agent.sensor.range == 0.0

@@ -21,11 +21,35 @@ get_position_at_time(trajectory::CircularTrajectory, time::Int)
 Gets agent position at a specific time for circular trajectory
 """
 function get_position_at_time(trajectory::CircularTrajectory, time::Int)
-    # TODO: Implement circular trajectory position calculation
-    # - Calculate angle based on time and period
-    # - Convert to x,y coordinates
+    # Calculate angle based on time and period
+    # Phase 0 is aligned with the Ground Station at (5,5)
     
-    angle = 2π * (time % trajectory.period) / trajectory.period
+    # Calculate the angle from circle center to Ground Station (5,5)
+    gs_x, gs_y = 5, 5  # Ground Station position
+    gs_angle = atan(gs_y - trajectory.center_y, gs_x - trajectory.center_x)
+    # Calculate the trajectory angle, starting from GS direction at phase 0
+    angle = gs_angle + 2π * mod(time, trajectory.period) / trajectory.period
+    x = trajectory.center_x + round(Int, trajectory.radius * cos(angle))
+    y = trajectory.center_y + round(Int, trajectory.radius * sin(angle))
+    
+    return (x, y)
+end
+
+"""
+get_position_at_time(trajectory::CircularTrajectory, time::Int, phase_offset::Int)
+Gets agent position at a specific time for circular trajectory with phase offset
+"""
+function get_position_at_time(trajectory::CircularTrajectory, time::Int, phase_offset::Int)
+    # Apply phase offset to the time
+    # Phase 0 is aligned with the Ground Station at (5,5)
+    
+    # Calculate the angle from circle center to Ground Station (5,5)
+    gs_x, gs_y = 5, 5  # Ground Station position
+    gs_angle = atan(gs_y - trajectory.center_y, gs_x - trajectory.center_x)
+    
+    # Calculate the trajectory angle, starting from GS direction at phase 0
+    adjusted_time = mod((time + phase_offset), trajectory.period)
+    angle = gs_angle + 2π * adjusted_time / trajectory.period
     x = trajectory.center_x + round(Int, trajectory.radius * cos(angle))
     y = trajectory.center_y + round(Int, trajectory.radius * sin(angle))
     
@@ -37,7 +61,7 @@ get_position_at_time(trajectory::LinearTrajectory, time::Int)
 Gets agent position at a specific time for linear trajectory
 """
 function get_position_at_time(trajectory::LinearTrajectory, time::Int)
-    step = (time % trajectory.period)
+    step = mod(time,trajectory.period)
     n_steps = trajectory.period - 1
     x = round(Int, trajectory.start_x + step * (trajectory.end_x - trajectory.start_x) / n_steps)
     y = round(Int, trajectory.start_y + step * (trajectory.end_y - trajectory.start_y) / n_steps)
@@ -137,11 +161,14 @@ function get_trajectory_waypoints(trajectory::ComplexTrajectory, num_points::Int
 end
 
 """
-create_circular_trajectory(center_x::Int, center_y::Int, radius::Float64, period::Int)
+create_circular_trajectory(center_x, center_y, radius::Float64, period::Int)
 Creates a circular trajectory
 """
-function create_circular_trajectory(center_x::Int, center_y::Int, radius::Float64, period::Int)
-    return CircularTrajectory(center_x, center_y, radius, period)
+function create_circular_trajectory(center_x, center_y, radius::Float64, period::Int)
+    # Convert center coordinates to integers
+    center_x_int = round(Int, center_x)
+    center_y_int = round(Int, center_y)
+    return CircularTrajectory(center_x_int, center_y_int, radius, period, 1.0)  # Default step_size = 1.0
 end
 
 """
