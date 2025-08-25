@@ -354,7 +354,7 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state):
   – Return the best sequence
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=3, N_particles::Int=64, N_sweeps::Int=5, ε::Float64=0.1)
+                    N_seed::Int=50, N_particles::Int=64, N_sweeps::Int=50, ε::Float64=0.1)
     # Start timing
     start_time = time()
     

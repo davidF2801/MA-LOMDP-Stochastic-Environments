@@ -26,7 +26,7 @@ using Infiltrator
 # =============================================================================
 
 # 🎯 MAIN SIMULATION PARAMETERS
-const NUM_STEPS = 10            # Total simulation steps (reduced for quick test)
+const NUM_STEPS = 120            # Total simulation steps (reduced for quick test)
 const PLANNING_MODE = :pbvi_policy_tree         # Test PBVI policy tree planning
 #const modes = [:pbvi, :prior_based, :random]
 const modes = [:pbvi_1_0_0_0, :pbvi_0_5_0_5, :pbvi_0_0_1_0]  # Test only the policy tree mode
