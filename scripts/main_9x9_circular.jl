@@ -726,7 +726,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     
     # Initialize ground station
     gs_state = GroundStation.initialize_ground_station(env, agents, num_states=2)
-    
+    @infiltrate
     # Initialize enhanced event tracker
     event_tracker = initialize_enhanced_event_tracker()
     

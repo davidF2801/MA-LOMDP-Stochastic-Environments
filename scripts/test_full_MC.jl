@@ -92,7 +92,7 @@ end
 
 println("Initial state:")
 print_grid(state, rows, cols)
-
+@infiltrate
 for t in 1:steps
     global state
     x_idx = state_to_int(state)

@@ -31,34 +31,61 @@ println("📊 Starting postprocessing analysis...")
 # Multiple results directories to analyze - add as many as needed
 TARGET_RUNS = [
     #"run_2025-08-17T14-08-17-424",
-    "run_2025-08-16T16-52-42-231",
+    #"run_2025-08-19T10-23-17-927-new",
     # Add more run directories here as needed
     # "run_2025-08-16T16-52-26-473",
     # "run_2025-08-16T16-52-42-231",
+    "run_2025-08-25T22-54-49-857-2"
 ]
 
 # Output directory - use the first target run folder
 OUTPUT_DIR = joinpath("..", "results", TARGET_RUNS[1])
 
 # Performance metrics to analyze
-METRICS = [:event_observation_percentage, :ndd_expected, :final_uncertainty, :average_planning_time]
+METRICS = [:event_observation_percentage, :final_uncertainty, :average_planning_time, :ndd_actual]
 
 # Planning modes to compare
 #PLANNING_MODES = [:sweep, :script, :random]
-PLANNING_MODES = [:script, :pbvi, :macro_approx_090, :prior_based, :sweep, :greedy, :random]
+#PLANNING_MODES = [:script, :pbvi, :macro_approx_090, :prior_based, :sweep, :greedy, :random]
 #PLANNING_MODES = [:script, :pbvi, :prior_based, :random]
-#PLANNING_MODES = [:pbvi_0_0_1_0, :pbvi_0_5_0_5, :pbvi_1_0_0_0, :prior_based, :random]
+PLANNING_MODES = [:pbvi_0_0_1_0, :pbvi_0_5_0_5, :pbvi_1_0_0_0, :prior_based, :random]
 
 # Function to get display name for planning modes
 function get_mode_display_name(mode::Symbol)
+    mode_str = string(mode)
+    
     if mode == :script
         return "ABBA"
     elseif mode == :pbvi
         return "SB-ABBA"
     elseif mode == :macro_approx_090
         return "PB-ABBA_090"
+    elseif mode == :prior_based
+        return "Prior-Based"
+    elseif mode == :random
+        return "Random"
+    elseif startswith(mode_str, "pbvi_")
+        # Parse PBVI variants with weights
+        # Format: pbvi_X_Y_Z_W where X_Y is entropy weight and Z_W is detection weight
+        parts = split(mode_str, "_")
+        if length(parts) >= 5
+            # Extract weights: pbvi_X_Y_Z_W -> entropy=X.Y, detection=Z.W
+            entropy_int = parts[2]
+            entropy_dec = parts[3]
+            detection_int = parts[4]
+            detection_dec = parts[5]
+            
+            entropy_weight = "$(entropy_int).$(entropy_dec)"
+            detection_weight = "$(detection_int).$(detection_dec)"
+            
+            return "SB-ABBA (E:$(entropy_weight), D:$(detection_weight))"
+        else
+            return "SB-ABBA"
+        end
     else
-        return string(mode)
+        # Handle other modes by making them more readable
+        readable_name = replace(mode_str, "_" => " ")
+        return titlecase(readable_name)
     end
 end
 
@@ -660,7 +687,7 @@ function create_summary_table(all_data::Dict{String, Dict}, output_dir::String)
                 for (unique_run_id, run_data) in timestamp_data[mode]
                     row = Dict(
                         :timestamp => timestamp,
-                        :planning_mode => string(mode),
+                        :planning_mode => get_mode_display_name(mode),
                         :run_number => run_counter,
                         :unique_run_id => unique_run_id,
                         :source_run_dir => get(run_data, :source_run_dir, "unknown"),
@@ -696,10 +723,10 @@ function create_summary_table(all_data::Dict{String, Dict}, output_dir::String)
     println("=====================")
     
     for mode in PLANNING_MODES
-        mode_data = filter(row -> row.planning_mode == string(mode), df)
+        mode_data = filter(row -> row.planning_mode == get_mode_display_name(mode), df)
         
         if !isempty(mode_data)
-            println("\n$(mode):")
+            println("\n$(get_mode_display_name(mode)):")
             for metric in METRICS
                 if haskey(mode_data[1, :], metric)
                     values = collect(skipmissing(mode_data[!, metric]))
@@ -1015,7 +1042,7 @@ function main()
         
         for mode in PLANNING_MODES
             if haskey(averages, mode)
-                println(file, "$(mode):")
+                println(file, "$(get_mode_display_name(mode)):")
                 for metric in METRICS
                     if haskey(averages[mode], metric)
                         println(file, "  $(metric): $(round(averages[mode][metric], digits=3))")
