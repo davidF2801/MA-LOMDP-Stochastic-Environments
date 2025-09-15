@@ -354,7 +354,7 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state):
   – Return the best sequence
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=50, N_particles::Int=64, N_sweeps::Int=50, ε::Float64=0.1)
+                    N_seed::Int=30, N_particles::Int=32, N_sweeps::Int=50, ε::Float64=0.1)
     # Start timing
     start_time = time()
     
@@ -374,11 +374,11 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     𝔅 = build_belief_set(B_clean, agent_i, τ_i, agents_j, τ_js_vector, H, env, gs_state, N_seed)
     println("🔄 Running PBVI with $(length(𝔅)) belief points...")
     # Run PBVI
-    VALUE, POLICY = pbvi(𝔅, N_particles, N_sweeps, ε, agent_i, env, gs_state)
-    # Extract best sequence from policy
-    
-    best_sequence = extract_best_sequence(POLICY, VALUE, 𝔅, agent_i, env, gs_state, H)
-    @infiltrate
+        # Run PBVI
+    VALUE, POLICY, Q_VALUES = pbvi(𝔅, N_particles, N_sweeps, ε, agent_i, env, gs_state)
+        # Extract best sequence from policy
+        
+    best_sequence = extract_best_sequence(POLICY, VALUE, Q_VALUES, 𝔅, agent_i, env, gs_state, H)
     # End timing
     end_time = time()
     planning_time = end_time - start_time
@@ -560,240 +560,236 @@ function build_belief_set(B_clean::Belief, agent_i::Agent, τ_i::Int, agents_j::
     return collect(𝔅)
 end
 
-"""
-PBVI algorithm
-"""
 function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Float64, 
-              agent_i::Agent, env, gs_state)
-    VALUE = Dict{BeliefPoint, Float64}()
-    POLICY = Dict{BeliefPoint, SensingAction}()
-    # make a Dict from phase-tuple → vector of points in that slice
-    SLICE_BUCKET  = Dict{Tuple{Vararg{Int}}, Vector{BeliefPoint}}()
-    DIGEST_LOOKUP = Dict{Tuple{Vararg{Int}}, Dict{UInt64,BeliefPoint}}()
+    agent_i::Agent, env, gs_state)
+VALUE = Dict{BeliefPoint, Float64}()
+POLICY = Dict{BeliefPoint, SensingAction}()
+Q_VALUES = Dict{BeliefPoint, Dict{SensingAction, Float64}}()  # Store Q-values for all actions
+# make a Dict from phase-tuple → vector of points in that slice
+SLICE_BUCKET  = Dict{Tuple{Vararg{Int}}, Vector{BeliefPoint}}()
+DIGEST_LOOKUP = Dict{Tuple{Vararg{Int}}, Dict{UInt64,BeliefPoint}}()
 
-    # Timing statistics
-    timing_stats = Dict{Symbol, Float64}(
-        :total_simulate_one_step => 0.0,
-        :total_nearest_neighbor => 0.0,
-        :total_action_set_gen => 0.0,
-        :total_belief_copy => 0.0
-    )
-    operation_counts = Dict{Symbol, Int}(
-        :simulate_one_step_calls => 0,
-        :nearest_neighbor_calls => 0,
-        :action_set_gen_calls => 0,
-        :belief_copy_calls => 0
-    )
+# Timing statistics
+timing_stats = Dict{Symbol, Float64}(
+:total_simulate_one_step => 0.0,
+:total_nearest_neighbor => 0.0,
+:total_action_set_gen => 0.0,
+:total_belief_copy => 0.0
+)
+operation_counts = Dict{Symbol, Int}(
+:simulate_one_step_calls => 0,
+:nearest_neighbor_calls => 0,
+:action_set_gen_calls => 0,
+:belief_copy_calls => 0
+)
 
-    for bp in 𝔅
-        key = Tuple(bp.clock.phases)          # hashable
-        push!(get!(SLICE_BUCKET, key, BeliefPoint[]), bp)
-    end
-    for (key, vec) in SLICE_BUCKET
-        lkp = Dict{UInt64,BeliefPoint}()
-        for bp in vec
-            lkp[bp.digest] = bp
-        end
-        DIGEST_LOOKUP[key] = lkp              # digest → bp in that slice
-    end
+for bp in 𝔅
+key = Tuple(bp.clock.phases)          # hashable
+push!(get!(SLICE_BUCKET, key, BeliefPoint[]), bp)
+end
+for (key, vec) in SLICE_BUCKET
+lkp = Dict{UInt64,BeliefPoint}()
+for bp in vec
+  lkp[bp.digest] = bp
+end
+DIGEST_LOOKUP[key] = lkp              # digest → bp in that slice
+end
 
-    
-    # Initialize values
-    for bp in 𝔅
-        VALUE[bp] = 0.0
-    end
-    
-    # Prepare candidates for fast KL divergence search
-    prep = prepare_kl_candidates(𝔅)
-    
-    γ = env.discount
-    
-    for sweep in 1:N_sweeps
-        sweep_start = time()
-        Δ = 0.0
-        shuffled_𝔅 = shuffle(𝔅)
-        sim_times = Float64[]  # Track simulation times for this sweep
 
-        
-        # Sequential belief point processing (thread-safe)
-        for bp in shuffled_𝔅
-            best_Q = -Inf
-            best_act = nothing
-            
-            # Get all feasible actions with timing
-            action_start = time()
-            action_set = all_pointings(agent_i, bp.clock, env)
-            action_time = time() - action_start
-            timing_stats[:total_action_set_gen] += action_time
-            operation_counts[:action_set_gen_calls] += 1
-            
-            for a in action_set
-                sum_Q = 0.0
-                
-                # Sequential particle simulation
-                for particle in 1:N_particles
-                    # Time belief copying
-                    copy_start = time()
-                    clock_copy = copy(bp.clock)
-                    belief_copy = deepcopy(bp.belief)
-                    copy_time = time() - copy_start
-                    timing_stats[:total_belief_copy] += copy_time
-                    operation_counts[:belief_copy_calls] += 1
-                    
-                    # Time simulate_one_step
-                    sim_start = time()
-                    (r, τ′, b′, evolve_time, timing_breakdown) = simulate_one_step(clock_copy, belief_copy, a, 
-                                                    agent_i, get_other_agents(agent_i, env), env, gs_state)                    
-                    sim_time = time() - sim_start
-                    timing_stats[:total_simulate_one_step] += sim_time
-                    operation_counts[:simulate_one_step_calls] += 1
-                    
-                    # Time the nearest neighbor search
-                    nn_start = time()
-                    nearest_bp = find_nearest_belief_blas(BeliefPoint(τ′, b′), prep, SLICE_BUCKET, DIGEST_LOOKUP)
-                    nn_time = time() - nn_start
-                    timing_stats[:total_nearest_neighbor] += nn_time
-                    operation_counts[:nearest_neighbor_calls] += 1
-                    
-                    v_next = VALUE[nearest_bp]
-                    
-                    sum_Q += r + γ * v_next
-                end
-                
-                Q_hat = sum_Q / N_particles
-                
-                if Q_hat > best_Q
-                    best_Q = Q_hat
-                    best_act = a
-                end
-            end
-            
-            Δ = max(Δ, abs(best_Q - VALUE[bp]))
-            VALUE[bp] = best_Q
-            POLICY[bp] = best_act
-        end
-        
-        sweep_time = time() - sweep_start
-        println("  Sweep $(sweep): max change = $(round(Δ, digits=4)) in $(round(sweep_time, digits=2))s")
+# Initialize values and Q-values
+for bp in 𝔅
+VALUE[bp] = 0.0
+Q_VALUES[bp] = Dict{SensingAction, Float64}()
+end
 
-        
-        if Δ < ε
-            break
-        end
-    end
-    
-    # Print timing summary
-    println("\n📊 PBVI Timing Breakdown:")
-    println("• Simulate one step: $(round(timing_stats[:total_simulate_one_step] * 1000, digits=1)) ms ($(operation_counts[:simulate_one_step_calls]) calls)")
-    println("• Nearest neighbor search: $(round(timing_stats[:total_nearest_neighbor] * 1000, digits=1)) ms ($(operation_counts[:nearest_neighbor_calls]) calls)")
-    println("• Action set generation: $(round(timing_stats[:total_action_set_gen] * 1000, digits=1)) ms ($(operation_counts[:action_set_gen_calls]) calls)")
-    println("• Belief copying: $(round(timing_stats[:total_belief_copy] * 1000, digits=1)) ms ($(operation_counts[:belief_copy_calls]) calls)")
-    
-    return VALUE, POLICY
+# Prepare candidates for fast KL divergence search
+prep = prepare_kl_candidates(𝔅)
+
+γ = env.discount
+
+for sweep in 1:N_sweeps
+sweep_start = time()
+Δ = 0.0
+shuffled_𝔅 = shuffle(𝔅)
+sim_times = Float64[]  # Track simulation times for this sweep
+
+
+# Sequential belief point processing (thread-safe)
+for bp in shuffled_𝔅
+  best_Q = -Inf
+  best_act = nothing
+  action_q_values = Dict{SensingAction, Float64}()  # Q-values for this belief point
+  
+  # Get all feasible actions with timing
+  action_start = time()
+  action_set = all_pointings(agent_i, bp.clock, env)
+  action_time = time() - action_start
+  timing_stats[:total_action_set_gen] += action_time
+  operation_counts[:action_set_gen_calls] += 1
+  
+  for a in action_set
+      sum_Q = 0.0
+      
+      # Sequential particle simulation
+      for particle in 1:N_particles
+          # Time belief copying
+          copy_start = time()
+          clock_copy = copy(bp.clock)
+          belief_copy = deepcopy(bp.belief)
+          copy_time = time() - copy_start
+          timing_stats[:total_belief_copy] += copy_time
+          operation_counts[:belief_copy_calls] += 1
+          
+          # Time simulate_one_step
+          sim_start = time()
+          (r, τ′, b′, evolve_time, timing_breakdown) = simulate_one_step(clock_copy, belief_copy, a, 
+                                          agent_i, get_other_agents(agent_i, env), env, gs_state)                    
+          sim_time = time() - sim_start
+          timing_stats[:total_simulate_one_step] += sim_time
+          operation_counts[:simulate_one_step_calls] += 1
+          
+          # Time the nearest neighbor search
+          nn_start = time()
+          nearest_bp = find_nearest_belief_blas(BeliefPoint(τ′, b′), prep, SLICE_BUCKET, DIGEST_LOOKUP)
+          nn_time = time() - nn_start
+          timing_stats[:total_nearest_neighbor] += nn_time
+          operation_counts[:nearest_neighbor_calls] += 1
+          
+          v_next = VALUE[nearest_bp]
+          
+          sum_Q += r + γ * v_next
+      end
+      
+      Q_hat = sum_Q / N_particles
+      action_q_values[a] = Q_hat  # Store Q-value for this action
+      
+      if Q_hat > best_Q
+          best_Q = Q_hat
+          best_act = a
+      end
+  end
+  
+  # Store all Q-values for this belief point
+  Q_VALUES[bp] = action_q_values
+  
+  Δ = max(Δ, abs(best_Q - VALUE[bp]))
+  VALUE[bp] = best_Q
+  POLICY[bp] = best_act
+end
+
+sweep_time = time() - sweep_start
+println("  Sweep $(sweep): max change = $(round(Δ, digits=4)) in $(round(sweep_time, digits=2))s")
+
+
+if Δ < ε
+  break
+end
+end
+
+# Print timing summary
+println("\n📊 PBVI Timing Breakdown:")
+println("• Simulate one step: $(round(timing_stats[:total_simulate_one_step] * 1000, digits=1)) ms ($(operation_counts[:simulate_one_step_calls]) calls)")
+println("• Nearest neighbor search: $(round(timing_stats[:total_nearest_neighbor] * 1000, digits=1)) ms ($(operation_counts[:nearest_neighbor_calls]) calls)")
+println("• Action set generation: $(round(timing_stats[:total_action_set_gen] * 1000, digits=1)) ms ($(operation_counts[:action_set_gen_calls]) calls)")
+println("• Belief copying: $(round(timing_stats[:total_belief_copy] * 1000, digits=1)) ms ($(operation_counts[:belief_copy_calls]) calls)")
+
+return VALUE, POLICY, Q_VALUES  # Return Q-values too
 end
 """
-Extract best sequence from policy using belief points from PBVI
+Open-loop plan extraction using empirical distribution μ_τ(h)
+Implements: a_h^* = arg max_{a ∈ A_i} E_{b ~ μ_τ(h)} [Q̂((τ^(h), b), a)]
 """
 function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::Dict{BeliefPoint, Float64}, 
+                             Q_VALUES::Dict{BeliefPoint, Dict{SensingAction, Float64}},
                              𝔅::Vector{BeliefPoint}, agent_i::Agent, env, gs_state, H::Int)
     sequence = SensingAction[]
     
-    # Find the belief point that best represents the current state
-    # Look for belief points with clock phases matching current agent phases
-    # Calculate phases relative to agent_i (which is at phase 0)
-    current_phases = Int[]
-    
-    # Get all agents in the same order as the clock vector
+    # Calculate initial clock phases relative to agent_i (which is at phase 0)
     all_agents = [env.agents[j] for j in sort(collect(keys(env.agents)))]
-    
-    # Find agent_i's index in the clock vector
     agent_i_index = find_agent_index(agent_i, env)
     
-    # Calculate phases for all agents relative to agent_i
-    for (i, agent) in enumerate(all_agents)
-        if i == agent_i_index
-            # Agent_i is at phase 0
-            push!(current_phases, 0)
-        else
-            # Other agents: relative phase offset
-            relative_offset = mod((agent.phase_offset - agent_i.phase_offset), agent.trajectory.period)
-            push!(current_phases, relative_offset)
+    println("🔄 Implementing open-loop plan extraction using empirical distribution μ_τ(h)")
+    
+    # For each time step h in the horizon
+    for h in 0:(H-1)
+        # Calculate clock phases for time step h
+        τ_h_phases = Int[]
+        for (i, agent) in enumerate(all_agents)
+            if i == agent_i_index
+                # Agent_i is at phase h
+                push!(τ_h_phases, h % agent.trajectory.period)
+            else
+                # Other agents: relative phase offset + h
+                relative_offset = mod((agent.phase_offset - agent_i.phase_offset), agent.trajectory.period)
+                phase_h = mod(relative_offset + h, agent.trajectory.period)
+                push!(τ_h_phases, phase_h)
+            end
         end
-    end
-    @infiltrate
-    current_clock = ClockVector(current_phases)
-    if agent_i.id == 2
+        τ_h = ClockVector(τ_h_phases)
         
-    end
-    candidate_bps = BeliefPoint[]
-    
-    for bp in 𝔅
-        if bp.clock.phases == current_clock.phases
-            push!(candidate_bps, bp)
-        end
-    end
-    if isempty(candidate_bps)
-        # If no exact match, find the belief point with closest phases
-        if !isempty(𝔅)
-            # Sort by phase difference and take the closest
-            sort!(𝔅, by=bp -> sum(abs.(bp.clock.phases .- current_clock.phases)))
-            current_bp = 𝔅[1]
-        else
-            # Fallback: return empty sequence
-            return SensingAction[]
-        end
-    else
-        # Take the belief point with highest value among candidates
-        best_value = -Inf
-        current_bp = candidate_bps[1]
-        for bp in candidate_bps
-            if haskey(VALUE, bp) && VALUE[bp] > best_value
-                best_value = VALUE[bp]
-                current_bp = bp
+        # Find all belief points that match this clock tuple - this is μ_τ(h)
+        beliefs_at_τ_h = BeliefPoint[]
+        for bp in 𝔅
+            if bp.clock.phases == τ_h.phases
+                push!(beliefs_at_τ_h, bp)
             end
         end
-    end
-    
-    # Extract sequence by following the policy
-    for h in 1:H
-        if haskey(POLICY, current_bp)
-            action = POLICY[current_bp]
-            push!(sequence, action)
+        
+        if isempty(beliefs_at_τ_h)
+            println("⚠️  No beliefs found for time step $h, using wait action")
+            push!(sequence, SensingAction(agent_i.id, Tuple{Int, Int}[], false))
+            continue
+        end
+        
+        # Calculate empirical distribution μ_τ(h): uniform over all beliefs in this clock tuple
+        # Each belief has probability 1/|beliefs_at_τ_h|
+        belief_probability = 1.0 / length(beliefs_at_τ_h)
+        
+        # Get all possible actions at this time step
+        # Use the first belief point to determine available actions (should be same for all with same clock)
+        available_actions = all_pointings(agent_i, τ_h, env)
+        
+        # Calculate expected Q-value for each action: E_{b ~ μ_τ(h)} [Q̂((τ^(h), b), a)]
+        best_expected_q = -Inf
+        best_action = nothing
+        
+        println("  Step $h: evaluating $(length(available_actions)) actions over $(length(beliefs_at_τ_h)) beliefs")
+        
+        for a in available_actions
+            expected_q = 0.0
             
-            # Find the next belief point by simulating forward
-            # We need to find a belief point that represents the next state
-            next_phases = Int[]
-            for (i, agent) in enumerate([agent_i; get_other_agents(agent_i, env)])
-                next_phase = mod((current_bp.clock.phases[i] + 1), agent.trajectory.period)
-                push!(next_phases, next_phase)
-            end
-            next_clock = ClockVector(next_phases)
-            next_candidates = BeliefPoint[]
-            
-            for bp in 𝔅
-                if bp.clock.phases == next_clock.phases
-                    push!(next_candidates, bp)
+            # Sum over all beliefs in the empirical distribution
+            for bp in beliefs_at_τ_h
+                if haskey(Q_VALUES, bp) && haskey(Q_VALUES[bp], a)
+                    q_value = Q_VALUES[bp][a]
+                    expected_q += belief_probability * q_value
+                else
+                    # If Q-value not available, use 0 (or could use VALUE[bp] as fallback)
+                    expected_q += belief_probability * 0.0
                 end
             end
             
-            if !isempty(next_candidates)
-                # Find the closest belief point to the simulated next state
-                # For simplicity, just take the first one
-                current_bp = next_candidates[1]
-            else
-                # If no next belief point found, break
-                break
+            # Select action with highest expected Q-value
+            if expected_q > best_expected_q
+                best_expected_q = expected_q
+                best_action = a
             end
+        end
+        
+        # Add the optimal action for this time step to the sequence
+        if best_action !== nothing
+            push!(sequence, best_action)
+            println("  Step $h: selected action with expected Q-value $(round(best_expected_q, digits=4))")
         else
             # Fallback to wait action
             push!(sequence, SensingAction(agent_i.id, Tuple{Int, Int}[], false))
-            break
+            println("  Step $h: fallback to wait action")
         end
     end
     
+    println("✅ Open-loop sequence extracted with $(length(sequence)) actions")
     return sequence
 end
-
 # function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction},
 #     VALUE::Dict{BeliefPoint, Float64},
 #     𝔅::Vector{BeliefPoint},

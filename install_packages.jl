@@ -55,7 +55,8 @@ end
 println("\n📈 Installing visualization packages...")
 packages_viz = [
     "Plots",
-    "StatsPlots"  # For boxplots and statistical visualizations
+    "StatsPlots",  # For boxplots and statistical visualizations
+    "PlotlyJS"
 ]
 
 for pkg in packages_viz

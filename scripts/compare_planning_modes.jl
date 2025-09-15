@@ -32,13 +32,13 @@ using Glob
 # Default settings (can be overridden by command line arguments)
 DEFAULT_MODE1 = :pbvi_0_5_0_5
 DEFAULT_MODE2 = :prior_based
-DEFAULT_METRIC = :all
+DEFAULT_METRIC = :event_observation_percentage
 DEFAULT_DIRECTION = "best"  # "best" or "worst"
 
 # Multiple results directories to analyze - add as many as needed
 TARGET_RUNS = [
-    #"run_2025-08-17T14-08-17-424",
-    "run_2025-08-19T10-23-17-927-new",
+    "run_2025-09-08T09-36-38-974",
+    #"run_2025-08-19T10-23-17-927-new",
     # Add more run directories here as needed
     # "run_2025-08-16T16-52-26-473",
     # "run_2025-08-16T16-52-42-231",

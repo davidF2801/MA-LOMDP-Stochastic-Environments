@@ -19,8 +19,14 @@ using Glob
 using Infiltrator
 using StatsPlots  # For boxplot support
 
-# Set plotting backend to GR for PNG support
+# Set plotting backend to GR for high-quality PDF support
 gr()
+# Set high DPI for better PDF quality
+ENV["GKSwstype"] = "nul"
+# Ensure consistent color rendering between PNG and PDF
+ENV["GR_COLORSPACE"] = "sRGB"
+# Set consistent color palette for both PNG and PDF
+default(palette=:default)
 
 println("📊 Starting postprocessing analysis...")
 
@@ -35,7 +41,7 @@ TARGET_RUNS = [
     # Add more run directories here as needed
     # "run_2025-08-16T16-52-26-473",
     # "run_2025-08-16T16-52-42-231",
-    "run_2025-08-25T22-54-49-857-2"
+    "run_2025-09-08T09-36-38-974"
 ]
 
 # Output directory - use the first target run folder
@@ -66,10 +72,10 @@ function get_mode_display_name(mode::Symbol)
         return "Random"
     elseif startswith(mode_str, "pbvi_")
         # Parse PBVI variants with weights
-        # Format: pbvi_X_Y_Z_W where X_Y is entropy weight and Z_W is detection weight
+        # Format: pbvi_X_Y_Z_W where X_Y is entropy weight (wh) and Z_W is detection weight (wv)
         parts = split(mode_str, "_")
         if length(parts) >= 5
-            # Extract weights: pbvi_X_Y_Z_W -> entropy=X.Y, detection=Z.W
+            # Extract weights: pbvi_X_Y_Z_W -> entropy=X.Y (wh), detection=Z.W (wv)
             entropy_int = parts[2]
             entropy_dec = parts[3]
             detection_int = parts[4]
@@ -78,7 +84,7 @@ function get_mode_display_name(mode::Symbol)
             entropy_weight = "$(entropy_int).$(entropy_dec)"
             detection_weight = "$(detection_int).$(detection_dec)"
             
-            return "SB-ABBA (E:$(entropy_weight), D:$(detection_weight))"
+            return "SB-ABBA (wh:$(entropy_weight), wv:$(detection_weight))"
         else
             return "SB-ABBA"
         end
@@ -479,15 +485,16 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
         # Create boxplot
         p = plot()
         
-        # Add boxplots for each mode
-        for (i, mode) in enumerate(PLANNING_MODES)
-            if haskey(mode_data, mode) && !isempty(mode_data[mode])
-                boxplot!(p, fill(i, length(mode_data[mode])), mode_data[mode], 
-                    label=get_mode_display_name(mode), 
-                    fillalpha=0.7,
-                    linewidth=2)
-            end
-        end
+         # Add boxplots for each mode
+         for (i, mode) in enumerate(PLANNING_MODES)
+             if haskey(mode_data, mode) && !isempty(mode_data[mode])
+                 boxplot!(p, fill(i, length(mode_data[mode])), mode_data[mode], 
+                     label=get_mode_display_name(mode), 
+                     fillalpha=0.7,
+                     linewidth=1.5,
+                     linecolor=:black)
+             end
+         end
         
         # Create descriptive metric title
         metric_title = if metric == :event_observation_percentage
@@ -506,18 +513,26 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
         
         plot!(p, 
             title="$(metric_title) Comparison",
-            xlabel="Planning Mode",
+            xlabel="",
             ylabel=metric_title,
             xticks=(1:length(PLANNING_MODES), [get_mode_display_name(m) for m in PLANNING_MODES]),
             xrotation=45,
             legend=false,
             grid=true,
-            size=(600, 400),
-            titlefontsize=16,
-            bottom_margin=10Plots.mm)
+            gridwidth=0.5,
+            gridalpha=0.3,
+            size=(700, 700),
+            titlefontsize=20,
+            xlabelfontsize=16,
+            ylabelfontsize=16,
+            xtickfontsize=14,
+            ytickfontsize=14,
+            bottom_margin=15Plots.mm,
+            left_margin=18Plots.mm,
+            top_margin=15Plots.mm)
         
         # Save plot
-        plot_filename = joinpath(output_dir, "boxplot_$(metric).png")
+        plot_filename = joinpath(output_dir, "boxplot_$(metric).pdf")
         savefig(p, plot_filename)
         println("    ✓ Saved: $(basename(plot_filename))")
         
@@ -584,7 +599,7 @@ function create_uncertainty_evolution_plots(all_data::Dict{String, Dict}, output
                     plot!(p, time_points, means, 
                         ribbon=stds,
                         label=get_mode_display_name(mode),
-                        linewidth=2,
+                        linewidth=1.5,
                         fillalpha=0.3)
                 end
             end
@@ -596,10 +611,18 @@ function create_uncertainty_evolution_plots(all_data::Dict{String, Dict}, output
                 ylabel="Average Uncertainty (Entropy)",
                 legend=true,
                 grid=true,
-                size=(800, 600))
+                gridwidth=0.5,
+                gridalpha=0.3,
+                size=(800, 600),
+                titlefontsize=20,
+                xlabelfontsize=16,
+                ylabelfontsize=16,
+                xtickfontsize=14,
+                ytickfontsize=14,
+                legendfontsize=14)
             
             # Save plot
-            plot_filename = joinpath(output_dir, "uncertainty_evolution_$(timestamp).png")
+            plot_filename = joinpath(output_dir, "uncertainty_evolution_$(timestamp).pdf")
             savefig(p, plot_filename)
             println("    ✓ Saved: $(basename(plot_filename))")
         end
@@ -659,12 +682,18 @@ function create_average_uncertainty_comparison(all_data::Dict{String, Dict}, out
         ylabel="Average Uncertainty (Entropy)",
         legend=true,
         grid=true,
+        gridwidth=0.5,
+        gridalpha=0.3,
         size=(900, 600),
-        titlefontsize=16,
-        legendfontsize=12)
+        titlefontsize=20,
+        xlabelfontsize=16,
+        ylabelfontsize=16,
+        xtickfontsize=14,
+        ytickfontsize=14,
+        legendfontsize=16)
     
     # Save plot
-    plot_filename = joinpath(output_dir, "average_uncertainty_comparison.png")
+    plot_filename = joinpath(output_dir, "average_uncertainty_comparison.pdf")
     savefig(p, plot_filename)
     println("    ✓ Saved: $(basename(plot_filename))")
     
@@ -795,17 +824,25 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
                 alpha=0.7,
                 legend=false,
                 grid=true,
-                size=(400, 300),
-                titlefontsize=16,
+                gridwidth=0.5,
+                gridalpha=0.3,
+                size=(500, 580),
+                titlefontsize=20,
+                xlabelfontsize=16,
+                ylabelfontsize=16,
+                xtickfontsize=14,
+                ytickfontsize=14,
                 xrotation=45,
-                bottom_margin=10Plots.mm)
+                bottom_margin=15Plots.mm,
+                left_margin=18Plots.mm,
+                top_margin=15Plots.mm)
             
             # Add value labels on bars with better positioning
             for (j, val) in enumerate(values)
                 # Position text above the bar with more offset to avoid overlap
                 y_pos = val + 0.05 * maximum(values)
                 # Use smaller font size and better positioning
-                annotate!(p, j, y_pos, text(round(val, digits=3), 8, :center, :black))
+                annotate!(p, j, y_pos, text(round(val, digits=3), 12, :center, :black))
             end
             
             push!(plots, p)
@@ -822,26 +859,35 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
     if length(plots) == 4
         combined_plot = plot(plots[1], plots[2], plots[3], plots[4],
             layout=(2,2),
-            size=(1200, 800),
-            margin=5Plots.mm)
+            size=(1400, 1200),
+            margin=0Plots.mm,
+            link=:none,
+            wspace=-0.01,
+            hspace=-0.01)
     elseif length(plots) == 3
         combined_plot = plot(plots[1], plots[2], plots[3],
             layout=(1,3),
-            size=(1200, 400),
-            margin=5Plots.mm)
+            size=(1400, 700),
+            margin=0Plots.mm,
+            link=:none,
+            wspace=-0.01,
+            hspace=-0.01)
     elseif length(plots) == 2
         combined_plot = plot(plots[1], plots[2],
             layout=(1,2),
-            size=(800, 400),
-            margin=5Plots.mm)
+            size=(1000, 700),
+            margin=0Plots.mm,
+            link=:none,
+            wspace=-0.01,
+            hspace=-0.01)
     else
         combined_plot = plot(plots[1],
-            size=(400, 400),
-            margin=5Plots.mm)
+            size=(500, 700),
+            margin=15Plots.mm)
     end
     
     # Save plot
-    plot_filename = joinpath(output_dir, "averages_bar_plot.png")
+    plot_filename = joinpath(output_dir, "averages_bar_plot.pdf")
     savefig(combined_plot, plot_filename)
     println("    ✓ Saved: $(basename(plot_filename))")
     
@@ -885,15 +931,16 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
     for (i, metric) in enumerate(METRICS)
         p = plots[i]
         
-        # Add boxplots for each mode
-        for (j, mode) in enumerate(PLANNING_MODES)
-            if haskey(metric_data[metric], mode) && !isempty(metric_data[metric][mode])
-                boxplot!(p, fill(j, length(metric_data[metric][mode])), metric_data[metric][mode], 
-                    label=get_mode_display_name(mode), 
-                    fillalpha=0.7,
-                    linewidth=2)
-            end
-        end
+         # Add boxplots for each mode
+         for (j, mode) in enumerate(PLANNING_MODES)
+             if haskey(metric_data[metric], mode) && !isempty(metric_data[metric][mode])
+                 boxplot!(p, fill(j, length(metric_data[metric][mode])), metric_data[metric][mode], 
+                     label=get_mode_display_name(mode), 
+                     fillalpha=0.7,
+                     linewidth=1.5,
+                     linecolor=:black)
+             end
+         end
         
         # Create descriptive metric title
         metric_title = if metric == :event_observation_percentage
@@ -912,14 +959,22 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
         
         plot!(p, 
             title=metric_title,
-            xlabel="Planning Mode",
+            xlabel="",
             ylabel=metric_title,
             xticks=(1:length(PLANNING_MODES), [get_mode_display_name(m) for m in PLANNING_MODES]),
             xrotation=45,
             legend=false,
             grid=true,
-            titlefontsize=12,
-            bottom_margin=10Plots.mm)
+            gridwidth=0.5,
+            gridalpha=0.3,
+            titlefontsize=16,
+            xlabelfontsize=14,
+            ylabelfontsize=14,
+            xtickfontsize=12,
+            ytickfontsize=12,
+            bottom_margin=15Plots.mm,
+            left_margin=18Plots.mm,
+            top_margin=15Plots.mm)
     end
     
     # Combine plots with dynamic layout
@@ -928,16 +983,16 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
     # Determine optimal layout based on number of metrics
     if num_metrics == 1
         layout = (1, 1)
-        plot_size = (600, 400)
+        plot_size = (600, 600)
     elseif num_metrics == 2
         layout = (1, 2)
-        plot_size = (1200, 400)
+        plot_size = (1200, 600)
     elseif num_metrics == 3
         layout = (1, 3)
-        plot_size = (1800, 400)
+        plot_size = (1800, 600)
     elseif num_metrics == 4
         layout = (2, 2)
-        plot_size = (1200, 800)
+        plot_size = (1400, 1200)
     elseif num_metrics <= 6
         layout = (2, 3)
         plot_size = (1800, 800)
@@ -951,10 +1006,14 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
     
     combined_plot = plot(plots..., 
         layout=layout, 
-        size=plot_size)
+        size=plot_size,
+        margin=0Plots.mm,
+        link=:none,
+        wspace=-0.01,
+        hspace=-0.01)
     
     # Save plot
-    plot_filename = joinpath(output_dir, "combined_comparison.png")
+    plot_filename = joinpath(output_dir, "combined_comparison.pdf")
     savefig(combined_plot, plot_filename)
     println("    ✓ Saved: $(basename(plot_filename))")
     
