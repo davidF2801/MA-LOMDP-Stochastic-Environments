@@ -1,0 +1,55 @@
+{
+  "simulation": {
+    "grid_height": 30,
+    "grid_width": 60,
+    "orbit_period": 120,
+    "field_of_regard_deg": 20.0,
+    "communication_range_deg": 5.0,
+    "num_rollouts": 20,
+    "planning_horizon": 5,
+    "discount_factor": 0.95,
+    "num_ground_stations": 4,
+    "min_satellites_per_station": 2,
+    "num_steps": 240,
+    "num_agents": 5,
+    "use_parallel_planning": true
+  },
+  "agents": [
+    {
+      "name": "Aurora-1",
+      "inclination_deg": 25.0,
+      "phase_deg": 0.0,
+      "latitude_offset": 0.0,
+      "color": "#ffd166"
+    },
+    {
+      "name": "Borealis-2",
+      "inclination_deg": 55.0,
+      "phase_deg": 72.0,
+      "latitude_offset": 5.0,
+      "color": "#4ecdc4"
+    },
+    {
+      "name": "Zenith-3",
+      "inclination_deg": 10.0,
+      "phase_deg": 144.0,
+      "latitude_offset": -8.0,
+      "color": "#ff6b6b"
+    },
+    {
+      "name": "Polaris-4",
+      "inclination_deg": 40.0,
+      "phase_deg": 216.0,
+      "latitude_offset": 3.0,
+      "color": "#95e1d3"
+    },
+    {
+      "name": "Vega-5",
+      "inclination_deg": 30.0,
+      "phase_deg": 288.0,
+      "latitude_offset": -5.0,
+      "color": "#f38181"
+    }
+  ]
+}
+
