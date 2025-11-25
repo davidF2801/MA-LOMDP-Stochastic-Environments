@@ -54,8 +54,9 @@ class Environment:
         persistence_map: Optional[np.ndarray] = None,
         blocked_mask: Optional[np.ndarray] = None,
         seed: int = 0,
+        transition_table: Optional[np.ndarray] = None,
     ):
-        assert mode in ("dbn2", "rsp")
+        assert mode in ("dbn2", "rsp", "viirs_table")
         assert topology in ("plane", "sphere"), "topology must be 'plane' or 'sphere'"
         self.width = width
         self.height = height
@@ -89,6 +90,21 @@ class Environment:
         self.rng = np.random.default_rng(seed)
         self.time = 0
         self.state = np.zeros((height, width), dtype=np.int8)  # ground truth: 0/1
+        
+        # For viirs_table mode: 512-pattern transition probability table
+        self.transition_table = transition_table
+        if mode == "viirs_table":
+            if transition_table is None:
+                raise ValueError("transition_table must be provided for mode='viirs_table'")
+            if transition_table.shape != (512,):
+                raise ValueError(f"transition_table must have shape (512,), got {transition_table.shape}")
+            # Define neighbor offsets in the same order as p_table_compute_from_data.py
+            # Order: (-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)
+            self.neighbor_offsets_8 = [
+                (-1, -1), (-1, 0), (-1, 1),
+                (0, -1),           (0, 1),
+                (1, -1),  (1, 0),  (1, 1),
+            ]
 
     # ---------- utilities ----------
     def reset(self, initial_events: int = 1) -> np.ndarray:
@@ -156,6 +172,8 @@ class Environment:
     def step(self) -> np.ndarray:
         if self.mode == "rsp":
             self._step_rsp()
+        elif self.mode == "viirs_table":
+            self._step_viirs_table()
         else:
             self._step_dbn2()
         self.time += 1
@@ -262,6 +280,129 @@ class Environment:
                 new[y, x] = 1 if self.rng.random() < p_event else 0
 
         self.state = new
+
+    # ---------- VIIRS table mode ----------
+    def _encode_local_pattern(self, center: int, neighbors: list[int]) -> int:
+        """Encode a 9-bit pattern (center + 8 neighbors) into an integer in [0, 511]."""
+        bits = [int(center)] + [int(b) for b in neighbors]
+        r = 0
+        for b in bits:
+            r = (r << 1) | b
+        return r
+
+    def _step_viirs_table(self):
+        """Step using the learned 512-pattern transition probability table."""
+        H, W = self.state.shape
+        old = self.state
+        new = old.copy()
+
+        for y in range(H):
+            for x in range(W):
+                if self.blocked_mask is not None and self.blocked_mask[y, x]:
+                    new[y, x] = 0
+                    continue
+
+                center = int(old[y, x])
+                
+                # Get neighbors in the same order as p_table_compute_from_data.py
+                neighbors = []
+                for dy, dx in self.neighbor_offsets_8:
+                    ny = y + dy
+                    nx = x + dx
+                    
+                    if self.topology == "sphere":
+                        # Handle wrap-around for sphere topology
+                        nx %= W
+                        if ny < 0:
+                            ny = 0
+                            nx = (nx + W // 2) % W
+                        elif ny >= H:
+                            ny = H - 1
+                            nx = (nx + W // 2) % W
+                        
+                        if 0 <= ny < H and 0 <= nx < W:
+                            neighbors.append(int(old[ny, nx]))
+                        else:
+                            neighbors.append(0)
+                    else:
+                        # Plane topology: outside boundaries = 0
+                        if 0 <= ny < H and 0 <= nx < W:
+                            neighbors.append(int(old[ny, nx]))
+                        else:
+                            neighbors.append(0)
+                
+                # Encode pattern and look up transition probability
+                pattern = self._encode_local_pattern(center, neighbors)
+                p_event = float(self.transition_table[pattern])
+                p_event = max(0.0, min(1.0, p_event))  # Clip to [0, 1]
+                
+                new[y, x] = 1 if self.rng.random() < p_event else 0
+
+        self.state = new
+
+    # ---------- transition kernel for belief updates ----------
+    def transition_probability(self, y: int, x: int, current_state: int, active_neighbors: int) -> float:
+        """
+        Compute transition probability P(x'=1 | x_j, x_N(j)) for belief updates.
+        
+        Args:
+            y, x: Cell coordinates
+            current_state: Current state of cell (0 or 1)
+            active_neighbors: Number of active neighbors (0-8)
+            
+        Returns:
+            Probability P(x'=1 | current_state, active_neighbors)
+        
+        Note: For viirs_table mode, this is an approximation using only neighbor count.
+        For exact probabilities, the full 9-bit pattern would be needed.
+        """
+        if self.blocked_mask is not None and self.blocked_mask[y, x]:
+            return 0.0
+        
+        if self.mode == "viirs_table":
+            # Approximation: use average probability over patterns with given center state and neighbor count
+            # This is a simplified version - ideally we'd need the full pattern
+            if self.transition_table is None:
+                return 0.0
+            
+            # For now, approximate by averaging over all patterns with same center and similar neighbor count
+            # This is not perfect but provides a reasonable approximation for belief updates
+            patterns_with_state = []
+            for pattern_idx in range(512):
+                # Extract center bit (most significant bit)
+                center_bit = (pattern_idx >> 8) & 1
+                if center_bit == current_state:
+                    # Count active neighbors
+                    neighbor_count = sum((pattern_idx >> i) & 1 for i in range(8))
+                    if neighbor_count == active_neighbors:
+                        patterns_with_state.append(pattern_idx)
+            
+            if patterns_with_state:
+                avg_prob = np.mean([self.transition_table[p] for p in patterns_with_state])
+                return float(np.clip(avg_prob, 0.0, 1.0))
+            else:
+                # Fallback: use global average
+                return float(np.clip(np.mean(self.transition_table), 0.0, 1.0))
+        
+        if self.mode == "dbn2":
+            if current_state == EventState2.EVENT_PRESENT:
+                # survive with prob 1 - death_rate
+                return max(0.0, min(1.0, 1.0 - self.death_rate))
+            else:
+                # birth from background + neighbor influence
+                p_event = self.birth_rate + self.neighbor_influence * active_neighbors
+                return max(0.0, min(1.0, p_event))
+        else:  # RSP mode
+            lam_map = self.ignition_map if self.ignition_map is not None else None
+            if current_state == 1:
+                delta = float(self.persistence_map[y, x]) if self.persistence_map is not None else self.rsp.delta
+                return max(0.0, min(1.0, delta))
+            else:
+                lam = float(lam_map[y, x]) if lam_map is not None else self.rsp.lam
+                beta0 = float(self.beta0_map[y, x]) if self.beta0_map is not None else self.rsp.beta0
+                alpha = float(self.alpha_map[y, x]) if self.alpha_map is not None else self.rsp.alpha
+                p_event = beta0 + lam + alpha * active_neighbors
+                return max(0.0, min(1.0, p_event))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@
 numpy>=1.24.0
 matplotlib>=3.7.0
 pandas>=2.0.0
+networkx>=3.0  # For graph visualization
+numba>=0.58.0  # For JIT compilation to speed up belief evolution
 
 # Optional (for saving animations)
 ffmpeg-python>=0.2.0
