@@ -673,16 +673,99 @@ class GraphBelief:
         # Belief is defined over the entire environment
         self.num_states = num_states
         
-        # Evolve all nodes from 0 to num_nodes-1
+        # Try fast path: Use _evolve_all_nodes_belief_numba for all nodes at once
+        if NUMBA_AVAILABLE and num_states == 2:
+            try:
+                # Check if we can get RSP parameters (required for fast path)
+                # Handle both GraphEnvironment and GraphReplayEnvironment
+                if hasattr(env, 'original_env') and env.original_env is not None:
+                    orig_env = env.original_env
+                    if not (hasattr(orig_env, 'mode') and orig_env.mode == "rsp"):
+                        raise AttributeError("Not RSP mode")
+                    get_rsp_params = lambda n: (
+                        float(orig_env.ignition_map[n]) if orig_env.ignition_map is not None else orig_env.rsp.lam,
+                        float(orig_env.beta0_map[n]) if orig_env.beta0_map is not None else orig_env.rsp.beta0,
+                        float(orig_env.alpha_map[n]) if orig_env.alpha_map is not None else orig_env.rsp.alpha,
+                        float(orig_env.persistence_map[n]) if orig_env.persistence_map is not None else orig_env.rsp.delta,
+                    )
+                elif hasattr(env, 'mode') and env.mode == "rsp" and hasattr(env, 'rsp'):
+                    get_rsp_params = lambda n: (
+                        float(env.ignition_map[n]) if env.ignition_map is not None else env.rsp.lam,
+                        float(env.beta0_map[n]) if env.beta0_map is not None else env.rsp.beta0,
+                        float(env.alpha_map[n]) if env.alpha_map is not None else env.rsp.alpha,
+                        float(env.persistence_map[n]) if env.persistence_map is not None else env.rsp.delta,
+                    )
+                else:
+                    raise AttributeError("Not RSP mode")
+                
+                # FAST PATH: Use _evolve_all_nodes_belief_numba for all nodes at once
+                # Convert belief to numpy array
+                belief_array = self.to_numpy_array(num_states)
+                
+                # Build adjacency list in the format expected by _evolve_all_nodes_belief_numba
+                # Find max neighbors across all nodes
+                max_neighbors = 0
+                for node in range(self.num_nodes):
+                    num_neighbors = len(env.get_neighbors(node))
+                    max_neighbors = max(max_neighbors, num_neighbors)
+                
+                # Build flattened adjacency list: [num_nodes * max_neighbors] with -1 padding
+                adjacency_list_flat = np.full(self.num_nodes * max_neighbors, -1, dtype=np.int32)
+                adjacency_counts = np.zeros(self.num_nodes, dtype=np.int32)
+                
+                for node in range(self.num_nodes):
+                    neighbors = list(env.get_neighbors(node))
+                    adjacency_counts[node] = len(neighbors)
+                    for i, neighbor in enumerate(neighbors):
+                        adjacency_list_flat[node * max_neighbors + i] = neighbor
+                
+                # Build RSP parameters per node: [num_nodes, 4] (lam, beta0, alpha, delta)
+                rsp_params_per_node = np.zeros((self.num_nodes, 4), dtype=np.float64)
+                for node in range(self.num_nodes):
+                    lam, beta0, alpha, delta = get_rsp_params(node)
+                    rsp_params_per_node[node, 0] = lam
+                    rsp_params_per_node[node, 1] = beta0
+                    rsp_params_per_node[node, 2] = alpha
+                    rsp_params_per_node[node, 3] = delta
+                
+                # Prepare observed nodes array
+                observed_nodes_list = list(observed_nodes)
+                observed_nodes_array = np.full(max(1, len(observed_nodes_list)), -1, dtype=np.int32)
+                for i, node in enumerate(observed_nodes_list):
+                    if 0 <= node < self.num_nodes:
+                        observed_nodes_array[i] = node
+                
+                # Call _evolve_all_nodes_belief_numba (evolves all nodes at once in Numba)
+                _evolve_all_nodes_belief_numba(
+                    belief_array,
+                    adjacency_list_flat,
+                    adjacency_counts,
+                    rsp_params_per_node,
+                    observed_nodes_array,
+                    len(observed_nodes_list),
+                    self.num_nodes,
+                    num_states,
+                    max_neighbors,
+                )
+                
+                # Convert back from numpy array
+                self.from_numpy_array(belief_array, num_states)
+                return  # Done! Much faster than looping
+                
+            except (AttributeError, KeyError, ValueError):
+                # Fall through to slow path if we can't use fast path
+                pass
+        
+        # SLOW PATH: Loop over nodes individually (fallback if Numba not available or not RSP mode)
+        import itertools
         for node in range(self.num_nodes):
             # Skip observed nodes (they are updated separately via update_from_observation)
             if node in observed_nodes:
                 continue
             
             neighbors = list(env.get_neighbors(node))
-            
-            # Fast path: Use Numba-optimized computation if available
             num_neighbors = len(neighbors)
+            
             if num_neighbors == 0:
                 # No neighbors - simplified case
                 new_probabilities = {}
@@ -695,71 +778,8 @@ class GraphBelief:
                         prob_current = self.get_probability(node, current_state)
                         prob += transition_prob * prob_current
                     new_probabilities[next_state] = prob
-            elif NUMBA_AVAILABLE and num_states == 2:
-                # FAST PATH: Use fully Numba-optimized computation
-                # Handle both GraphEnvironment and GraphReplayEnvironment
-                try:
-                    # Check if it's a replay environment first
-                    if hasattr(env, 'original_env') and env.original_env is not None:
-                        # GraphReplayEnvironment - get params from original_env
-                        orig_env = env.original_env
-                        if hasattr(orig_env, 'mode') and orig_env.mode == "rsp":
-                            lam = float(orig_env.ignition_map[node]) if orig_env.ignition_map is not None else orig_env.rsp.lam
-                            beta0 = float(orig_env.beta0_map[node]) if orig_env.beta0_map is not None else orig_env.rsp.beta0
-                            alpha = float(orig_env.alpha_map[node]) if orig_env.alpha_map is not None else orig_env.rsp.alpha
-                            delta = float(orig_env.persistence_map[node]) if orig_env.persistence_map is not None else orig_env.rsp.delta
-                        else:
-                            # Not RSP mode, fall through to slow path
-                            raise AttributeError("Not RSP mode")
-                    elif hasattr(env, 'mode') and env.mode == "rsp" and hasattr(env, 'rsp'):
-                        # GraphEnvironment - direct access
-                        lam = float(env.ignition_map[node]) if env.ignition_map is not None else env.rsp.lam
-                        beta0 = float(env.beta0_map[node]) if env.beta0_map is not None else env.rsp.beta0
-                        alpha = float(env.alpha_map[node]) if env.alpha_map is not None else env.rsp.alpha
-                        delta = float(env.persistence_map[node]) if env.persistence_map is not None else env.rsp.delta
-                    else:
-                        # Not RSP mode, fall through to slow path
-                        raise AttributeError("Not RSP mode")
-                    
-                    # Successfully got RSP parameters - use fast path
-                    # Convert beliefs to numpy arrays (only if Numba available)
-                    current_belief_array = np.zeros(num_states, dtype=np.float64)
-                    for state in range(num_states):
-                        current_belief_array[state] = self.get_probability(node, state)
-                    
-                    neighbor_beliefs_array = np.zeros((num_neighbors, num_states), dtype=np.float64)
-                    for i, neighbor in enumerate(neighbors):
-                        for state in range(num_states):
-                            neighbor_beliefs_array[i, state] = self.get_probability(neighbor, state)
-                    
-                    # Call fully Numba-optimized function (generates combinations inside Numba)
-                    new_belief_array = _evolve_node_belief_numba_full(
-                        current_belief_array,
-                        neighbor_beliefs_array,
-                        num_states,
-                        num_neighbors,
-                        lam, beta0, alpha, delta,
-                    )
-                    new_probabilities = {s: float(new_belief_array[s]) for s in range(num_states)}
-                    # Skip to normalization below
-                except (AttributeError, KeyError):
-                    # Fall through to slow path if we can't get RSP parameters
-                    new_probabilities = {}
-                    for next_state in range(num_states):
-                        prob = 0.0
-                        for current_state in range(num_states):
-                            for neighbor_states_tuple in itertools.product(range(num_states), repeat=num_neighbors):
-                                transition_prob = env.transition_probability_full(
-                                    node, next_state, current_state, neighbor_states_tuple, num_states
-                                )
-                                prob_current = self.get_probability(node, current_state)
-                                prob_neighbor_config = 1.0
-                                for i, neighbor_state in enumerate(neighbor_states_tuple):
-                                    prob_neighbor_config *= self.get_probability(neighbors[i], neighbor_state)
-                                prob += transition_prob * prob_current * prob_neighbor_config
-                        new_probabilities[next_state] = prob
             else:
-                # SLOW PATH: Pure Python fallback (only if Numba not available or not RSP mode)
+                # Compute for all neighbor combinations
                 new_probabilities = {}
                 for next_state in range(num_states):
                     prob = 0.0

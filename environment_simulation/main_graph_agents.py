@@ -26,6 +26,18 @@ try:
         from .graph_agents.graph_sharing_monte_carlo_agent import GraphSharingMonteCarloAgent
         from .graph_agents.graph_belief import GraphBelief
         from .visualize_graph import GraphAnimator, plot_graph_state
+        # CTDE imports (optional)
+        try:
+            from .graph_agents.graph_ctde_agent import GraphCTDEAgent
+            from .graph_agents.graph_ctde_training import create_graph_ctde_agents, train_ctde_agents
+            from .graph_agents.graph_ctde_trainer import CTDETrainer
+            CTDE_AVAILABLE = True
+        except ImportError:
+            CTDE_AVAILABLE = False
+            GraphCTDEAgent = None
+            create_graph_ctde_agents = None
+            train_ctde_agents = None
+            CTDETrainer = None
     else:
         raise ImportError
 except ImportError:
@@ -39,6 +51,18 @@ except ImportError:
     from environment_simulation.graph_agents.graph_sharing_monte_carlo_agent import GraphSharingMonteCarloAgent
     from environment_simulation.graph_agents.graph_belief import GraphBelief
     from environment_simulation.visualize_graph import GraphAnimator, plot_graph_state
+    # CTDE imports (optional)
+    try:
+        from environment_simulation.graph_agents.graph_ctde_agent import GraphCTDEAgent
+        from environment_simulation.graph_agents.graph_ctde_training import create_graph_ctde_agents, train_ctde_agents
+        from environment_simulation.graph_agents.graph_ctde_trainer import CTDETrainer
+        CTDE_AVAILABLE = True
+    except ImportError:
+        CTDE_AVAILABLE = False
+        GraphCTDEAgent = None
+        create_graph_ctde_agents = None
+        train_ctde_agents = None
+        CTDETrainer = None
 
 
 def create_graph_environment(
@@ -141,6 +165,7 @@ def create_graph_monte_carlo_agents(
     w_v: float = 1.0,
     discount_factor: float = 0.95,
     event_utility: Optional[dict[int, float]] = None,
+    epsilon: float = 0.0,
     rng: Optional[np.random.Generator] = None,
 ) -> list[GraphMonteCarloAgent]:
     """Create graph-based Monte Carlo agents."""
@@ -171,6 +196,7 @@ def create_graph_monte_carlo_agents(
             w_v=w_v,
             discount_factor=discount_factor,
             event_utility=event_utility if event_utility is not None else {0: 0.0, 1: 1.0},
+            epsilon=epsilon,
         )
         
         # Initialize belief for starting node (neighbors will be initialized during first observation)
@@ -347,12 +373,13 @@ class GraphSimulation:
         }
         
         # Global event tracking
-        # Track all events that have ever existed: node_id -> {start_step, end_step, first_detection_step, observed_by}
-        self.event_events: dict[int, dict] = {}
+        # Track all events that have ever existed: event_id -> {node_id, start_step, end_step, first_detection_step, observed_by}
+        # Each event instance gets a unique ID (node_id, start_step), even if multiple events occur at the same node
+        self.event_events: dict[tuple[int, int], dict] = {}  # (node_id, start_step) -> event info
         
         # Multi-agent event tracking
-        # Set of node IDs representing unique events observed by ANY agent
-        self.multi_agent_unique_events: set[int] = set()
+        # Set of unique event IDs (node_id, start_step) representing unique events observed by ANY agent
+        self.multi_agent_unique_events: set[tuple[int, int]] = set()
         
         # Multi-agent statistics
         self.multi_agent_stats = {
@@ -377,28 +404,118 @@ class GraphSimulation:
         self.print_lock = threading.Lock()  # Lock for synchronized printing
     
     def step(self):
-        """Execute one simulation step."""
-        step_before = self.env.time  # Step before env.step()
+        """
+        Execute one simulation step.
         
-        # Environment evolves (increments env.time)
+        For UAVs (action and observation are separate), the correct POMDP order is:
+        1. Observe current node (where agent is from previous step) at t=k
+        2. Update belief with observation
+        3. Select action based on updated belief
+        4. Evolve belief with transition model (to get belief at t=k+1)
+        5. Execute action (move to new node)
+        6. Environment evolves (env.step() to t=k+1)
+        """
+        step_before = self.env.time  # Current step (t=k)
+        
+        # STEP 1: Observe current node (where agents are from previous step)
+        # STEP 2: Update belief with observations
+        for agent in self.agents:
+            # Observe the node the agent is currently at
+            observed_state = agent.observe_current_node(self.env)
+            observed_node = agent.current_node
+            
+            # Update agent statistics
+            self.agent_stats[agent.name]["observations_count"] += 1
+            if observed_state == 1:
+                self.agent_stats[agent.name]["events_observed"] += 1
+            
+            # Update belief with observation
+            agent.update_belief_from_observation(self.env, observed_node, observed_state)
+            
+            # Record observation for sharing agents
+            if isinstance(agent, GraphSharingMonteCarloAgent):
+                agent._record_own_observation(step_before, observed_node, observed_state)
+            
+            # Track events (for statistics)
+            self._track_events(step_before, agent.name, observed_node, observed_state)
+        
+        # Handle communication for sharing agents (after observations are recorded)
+        self._handle_agent_communication(step_before)
+        
+        # STEP 3: Select actions based on updated beliefs (ONLY selection, no execution yet)
+        agent_actions = {}
+        # Check if we have CTDE agents
+        has_ctde_agents = CTDE_AVAILABLE and any(
+            isinstance(agent, GraphCTDEAgent) for agent in self.agents
+        )
+        
+        if has_ctde_agents:
+            # CTDE agents: sequential (need access to other agents for peer info)
+            for agent in self.agents:
+                if isinstance(agent, GraphCTDEAgent):
+                    # Update communication info before action selection
+                    other_agents = [a for a in self.agents if a.name != agent.name]
+                    agent.update_communication_info(other_agents, self.env, step_before)
+                    # Use act_with_context
+                    action_info = agent.act_with_context(self.env, other_agents, step_before)
+                    agent_actions[agent.name] = action_info
+                else:
+                    # Non-CTDE agent mixed with CTDE agents
+                    agent.compute_policy(self.env, self.planning_horizon)
+                    action_info = agent.act(self.env)
+                    agent_actions[agent.name] = action_info
+        elif self.use_parallel_planning and len(self.agents) > 1:
+            # Parallel planning: all agents plan simultaneously
+            agent_tasks = [(agent, {}) for agent in self.agents]
+            agent_results = {}
+            agent_name_to_agent = {}
+            
+            with ThreadPoolExecutor(max_workers=len(self.agents)) as executor:
+                future_to_agent_name = {
+                    executor.submit(self._agent_plan, agent, {}): agent.name
+                    for agent, _ in agent_tasks
+                }
+                for agent, _ in agent_tasks:
+                    agent_name_to_agent[agent.name] = agent
+                
+                for future in as_completed(future_to_agent_name):
+                    agent_name = future_to_agent_name[future]
+                    agent = agent_name_to_agent[agent_name]
+                    try:
+                        action_info = future.result()
+                        agent_results[agent_name] = action_info
+                    except Exception as exc:
+                        with self.print_lock:
+                            print(f"Agent {agent_name} generated an exception: {exc}")
+                        raise
+            
+            for agent in sorted(self.agents, key=lambda a: a.name):
+                agent_actions[agent.name] = agent_results[agent.name]
+        else:
+            # Sequential planning
+            for agent in self.agents:
+                agent.compute_policy(self.env, self.planning_horizon)
+                action_info = agent.act(self.env)
+                agent_actions[agent.name] = action_info
+        
+        # STEP 4: Evolve beliefs with transition model (after action selection, before execution)
+        # This evolves beliefs from t=k to t=k+1
+        for agent in self.agents:
+            agent.evolve_belief_with_environment(self.transition_env, set())
+        
+        # STEP 5: Execute actions (move agents to target nodes)
+        for agent in sorted(self.agents, key=lambda a: a.name):
+            action_info = agent_actions[agent.name]
+            self._process_agent_action(agent, step_before, action_info)
+        
+        # STEP 6: Environment evolves (increments env.time to t=k+1)
         self.env.step()
-        
-        step_after = self.env.time  # Step after env.step() (this is the new step)
+        step_after = self.env.time  # Step after env.step() (this is t=k+1)
         
         # Track event start/end from environment state transitions
         # Compares previous_state (state at step_before) with current_state (state at step_after)
         # to detect transitions that occurred during env.step()
         self._track_event_lifecycle(step_after)
-        
-        # Handle communication for sharing agents BEFORE planning
-        self._handle_agent_communication(step_after)
-        
-        if self.use_parallel_planning and len(self.agents) > 1:
-            # Parallel planning: all agents plan simultaneously
-            self._step_parallel(step_after)
-        else:
-            # Sequential planning: original behavior
-            self._step_sequential(step_after)
         
         # Update previous state (after all processing)
         self.previous_state = self.env.get_state().copy()
@@ -472,11 +589,17 @@ class GraphSimulation:
     
     def _agent_plan(self, agent: "GraphAgent", kwargs: dict) -> dict:
         """Execute agent planning (runs in parallel thread)."""
-        # Agent computes policy
-        agent.compute_policy(self.env, self.planning_horizon)
-        
-        # Agent chooses action (which node to move to)
-        action_info = agent.act(self.env)
+        # Handle CTDE agents specially (they need other_agents and timestep)
+        if CTDE_AVAILABLE and isinstance(agent, GraphCTDEAgent):
+            # Get other agents and timestep from kwargs
+            other_agents = kwargs.get('other_agents', [])
+            timestep = kwargs.get('timestep', self.env.time)
+            # CTDE agents use act_with_context
+            action_info = agent.act_with_context(self.env, other_agents, timestep)
+        else:
+            # Standard agents
+            agent.compute_policy(self.env, self.planning_horizon)
+            action_info = agent.act(self.env)
         
         return action_info
     
@@ -493,48 +616,35 @@ class GraphSimulation:
             self._process_agent_action(agent, step, action_info)
     
     def _process_agent_action(self, agent: "GraphAgent", step: int, action_info: dict):
-        """Process agent action and update belief (shared by parallel and sequential paths)."""
+        """
+        Process agent action execution (shared by parallel and sequential paths).
+        
+        Note: Observations and belief updates now happen in step() before action selection.
+        This method only executes the action (moves agent) and tracks statistics.
+        """
         target_node = action_info["target_node"]
         expected_reward = action_info.get("expected_reward", 0.0)
         
-        # Move agent to target node
+        # Execute action: Move agent to target node
         agent.move_to_node(target_node, self.env)
         
-        # Observe current node (exact state)
-        observed_state = agent.observe_current_node(self.env)
-        
         # Update agent statistics
-        self.agent_stats[agent.name]["observations_count"] += 1
         self.agent_stats[agent.name]["total_reward"] += expected_reward
         self.agent_stats[agent.name]["nodes_visited"].add(target_node)
         
-        if observed_state == 1:
-            self.agent_stats[agent.name]["events_observed"] += 1
-        
-        # Update belief with observation
-        agent.update_belief_from_observation(self.env, target_node, observed_state)
-        
-        # Record observation for sharing agents (GraphSharingMonteCarloAgent is imported at module level)
-        if isinstance(agent, GraphSharingMonteCarloAgent):
-            agent._record_own_observation(step, target_node, observed_state)
-        
-        # Evolve belief using transition kernel (use transition_env for replay environments)
-        agent.evolve_belief_with_environment(self.transition_env, {target_node})
-        
         # Print action (with lock for parallel execution)
         with self.print_lock:
+            # Get the state at the target node for display (but we already observed at current node)
+            target_state = agent.observe_current_node(self.env)
             print(f"Step {step:3d} | {agent.name:15s} | "
                   f"Node {target_node:4d} | "
-                  f"State {observed_state} | "
+                  f"State {target_state} | "
                   f"Reward: {expected_reward:7.3f}")
         
         # Track positions
         if step not in self.agent_positions:
             self.agent_positions[step] = {}
         self.agent_positions[step][agent.name] = target_node
-        
-        # Track events
-        self._track_events(step, agent.name, target_node, observed_state)
     
     def _track_event_lifecycle(self, step: int):
         """
@@ -548,6 +658,9 @@ class GraphSimulation:
         
         Note: Events are only added to unique_events when they are first observed,
         not when they start in the environment.
+        
+        Each event instance gets a unique identifier (node_id, start_step), so multiple
+        events at the same node (that start at different times) are tracked separately.
         """
         current_state = self.env.get_state()
         
@@ -559,10 +672,16 @@ class GraphSimulation:
             # This transition happened DURING env.step(), so the event started
             # at the step AFTER env.step() (the current step)
             if prev_state == 0 and curr_state == 1:
-                if node not in self.event_events:
-                    # New event - track its actual start time
+                # Create unique event ID: (node_id, start_step)
+                event_id = (node, step)
+                
+                # Check if an active event already exists at this node
+                # (shouldn't happen, but handle it by creating new event instance)
+                if event_id not in self.event_events:
+                    # New event instance - track its actual start time
                     # The event started at the current step (after env.step())
-                    self.event_events[node] = {
+                    self.event_events[event_id] = {
+                        "node_id": node,
                         "start_step": step,  # Event starts at this step (after env.step())
                         "end_step": None,
                         "first_detection_step": None,  # When first observed by any agent
@@ -576,9 +695,12 @@ class GraphSimulation:
             # This transition happened DURING env.step(), so the event ended
             # at the step AFTER env.step() (the current step)
             if prev_state == 1 and curr_state == 0:
-                if node in self.event_events:
-                    if self.event_events[node]["end_step"] is None:
-                        self.event_events[node]["end_step"] = step
+                # Find the active event at this node (the one that hasn't ended yet)
+                # Look for events at this node that don't have an end_step set
+                for event_id, event_info in self.event_events.items():
+                    if event_info["node_id"] == node and event_info["end_step"] is None:
+                        event_info["end_step"] = step
+                        break  # Only mark the first active event as ended
     
     def _track_events(self, step: int, agent_name: str, node: int, state: int):
         """
@@ -586,38 +708,59 @@ class GraphSimulation:
         
         Counting logic:
         - events_observed: Total number of times any agent observed state==1 (any node)
-        - unique_events_observed: Number of unique nodes where state==1 was observed at least once
+        - unique_events_observed: Number of unique event instances observed at least once
+          (each event instance is uniquely identified by (node_id, start_step))
         - reobservations: Number of observations beyond the first observation of each unique event
           (i.e., events_observed - unique_events_observed)
+        
+        Handles the case where multiple events occur at the same node by tracking each
+        event instance separately using (node_id, start_step) as the unique identifier.
         """
         # Track observations - count every time an agent observes state==1
         if state == 1:
             # Always increment total observations when state==1 is observed
             self.multi_agent_stats["events_observed"] += 1
             
-            # Ensure event is tracked (should already be from _track_event_lifecycle)
-            if node not in self.event_events:
-                # Event not yet tracked - create entry (shouldn't happen normally, but handle it)
-                self.event_events[node] = {
+            # Find the active event at this node
+            # An active event is one that:
+            # 1. Is at this node
+            # 2. Has started (start_step <= step)
+            # 3. Hasn't ended yet (end_step is None or end_step >= step)
+            active_event_id = None
+            for event_id, event_info in self.event_events.items():
+                if (event_info["node_id"] == node and 
+                    event_info["start_step"] <= step and
+                    (event_info["end_step"] is None or event_info["end_step"] >= step)):
+                    active_event_id = event_id
+                    break
+            
+            # If no active event found, create one (shouldn't happen normally, but handle it)
+            if active_event_id is None:
+                # Create event with approximate start time (current step or earlier)
+                active_event_id = (node, step)
+                self.event_events[active_event_id] = {
+                    "node_id": node,
                     "start_step": step,  # Approximate start (when first observed)
                     "end_step": None,
                     "first_detection_step": None,
                     "observed_by": set(),
-                    "observation_count": 0,  # Track total observations of this event
+                    "observation_count": 0,
                 }
             
-            # Increment observation count for this event
-            self.event_events[node]["observation_count"] = self.event_events[node].get("observation_count", 0) + 1
+            # Increment observation count for this event instance
+            event_info = self.event_events[active_event_id]
+            event_info["observation_count"] = event_info.get("observation_count", 0) + 1
             
             # Track first detection time (when first observed by ANY agent)
-            is_first_observation = self.event_events[node]["first_detection_step"] is None
+            is_first_observation = event_info["first_detection_step"] is None
             if is_first_observation:
-                self.event_events[node]["first_detection_step"] = step
+                event_info["first_detection_step"] = step
                 # Add to unique events when first observed by ANY agent
-                self.multi_agent_unique_events.add(node)
+                # Use unique event ID (node_id, start_step) to distinguish multiple events at same node
+                self.multi_agent_unique_events.add(active_event_id)
             
             # Track which agents have observed this event
-            self.event_events[node]["observed_by"].add(agent_name)
+            event_info["observed_by"].add(agent_name)
         
         # Update counts: reobservations = total observations - unique events
         # Each unique event has at least 1 observation, so reobservations = observations beyond the first
@@ -723,7 +866,8 @@ class GraphSimulation:
         """
         delays = []
         
-        for node, event_info in self.event_events.items():
+        # event_events now uses (node_id, start_step) tuples as keys
+        for event_id, event_info in self.event_events.items():
             start_step = event_info.get("start_step")
             end_step = event_info.get("end_step")
             first_detection = event_info.get("first_detection_step")
@@ -926,6 +1070,95 @@ def create_timestamp_folder() -> str:
     return timestamp_path
 
 
+def save_config_file(
+    timestamp_path: str,
+    num_nodes: int,
+    num_agents: int,
+    num_steps: int,
+    planning_horizon: int,
+    num_rollouts: int,
+    mode: str,
+    seed: int,
+    animation_interval: int,
+    w_h: float,
+    w_v: float,
+    event_utility: dict[int, float],
+    epsilon: float,
+    agent_types: list[str],
+) -> str:
+    """
+    Save simulation configuration to a markdown file in the timestamp folder.
+    
+    Args:
+        timestamp_path: Path to the timestamp folder
+        num_nodes: Number of nodes in the graph
+        num_agents: Number of agents
+        num_steps: Number of simulation steps
+        planning_horizon: Planning horizon for Monte Carlo agents
+        num_rollouts: Number of rollouts for Monte Carlo agents
+        mode: Environment mode ('rsp' or 'dbn2')
+        seed: Random seed
+        animation_interval: Animation interval in milliseconds
+        w_h: Weight for information gain in reward calculation
+        w_v: Weight for event value in reward calculation
+        event_utility: Event utility mapping {state: utility}
+        epsilon: Epsilon-greedy exploration probability
+        agent_types: List of agent types run in this batch
+        
+    Returns:
+        Path to the saved config file
+    """
+    config_path = os.path.join(timestamp_path, "config.md")
+    
+    # Format event_utility as a readable string
+    event_utility_str = ", ".join([f"{state}: {utility}" for state, utility in sorted(event_utility.items())])
+    
+    config_content = f"""# Simulation Configuration
+
+This file contains the configuration parameters used for this simulation run.
+
+## General Parameters
+
+- **Number of Nodes**: {num_nodes}
+- **Number of Agents**: {num_agents}
+- **Number of Steps**: {num_steps}
+- **Random Seed**: {seed}
+- **Environment Mode**: {mode}
+
+## Agent Parameters
+
+- **Planning Horizon**: {planning_horizon}
+- **Number of Rollouts** (Monte Carlo agents): {num_rollouts}
+- **Epsilon-Greedy Exploration Probability**: {epsilon}
+
+## Reward Function Parameters
+
+- **Weight for Information Gain (w_h)**: {w_h}
+- **Weight for Event Value (w_v)**: {w_v}
+- **Event Utility Mapping**: {{{event_utility_str}}}
+
+## Visualization Parameters
+
+- **Animation Interval**: {animation_interval} ms
+
+## Agent Types
+
+The following agent types were run in this batch:
+{chr(10).join(f"- {agent_type}" for agent_type in agent_types)}
+
+## Notes
+
+- All agent types use the same recorded environment evolution for fair comparison.
+- The environment evolution is recorded once and then replayed for each agent type.
+- Results are saved in subdirectories: `{timestamp_path}/<agent_type>/`
+"""
+    
+    with open(config_path, 'w', encoding='utf-8') as f:
+        f.write(config_content)
+    
+    return config_path
+
+
 def main(
     num_nodes: int = 100,
     num_agents: int = 4,
@@ -947,6 +1180,7 @@ def main(
     w_h: float = 1.0,  # Weight for information gain (horizon) in reward calculation
     w_v: float = 1.0,  # Weight for event value in reward calculation
     event_utility: Optional[dict[int, float]] = None,  # Event utility mapping {state: utility}
+    epsilon: float = 0.0,  # Epsilon-greedy exploration probability for Monte Carlo agents
 ):
     """
     Main function to run graph-based simulation with visualization.
@@ -1009,6 +1243,12 @@ def main(
         transition_env = original_env
     
     # Create agents based on agent_type
+    # IMPORTANT: Use a different seed for agent creation to ensure agent randomness
+    # is independent of environment randomness, even if environment seed is the same
+    # Agents should always have their own randomness, regardless of environment seed
+    import time
+    agent_seed = int(time.time() * 1000000) % (2**31)  # Independent random seed for agents
+    
     if agent_type == "monte_carlo":
         agents = create_graph_monte_carlo_agents(
             num_nodes=num_nodes,
@@ -1019,13 +1259,14 @@ def main(
             w_v=w_v,
             discount_factor=0.95,
             event_utility=event_utility,
-            rng=np.random.default_rng(seed),
+            epsilon=epsilon,
+            rng=np.random.default_rng(agent_seed),  # Use independent seed for agents
         )
     elif agent_type == "random":
         agents = create_graph_random_agents(
             num_nodes=num_nodes,
             num_agents=num_agents,
-            rng=np.random.default_rng(seed),
+            rng=np.random.default_rng(agent_seed),  # Use independent seed for agents
         )
     elif agent_type == "greedy":
         agents = create_graph_greedy_agents(
@@ -1034,7 +1275,7 @@ def main(
             w_h=w_h,
             w_v=w_v,
             event_utility=event_utility,
-            rng=np.random.default_rng(seed),
+            rng=np.random.default_rng(agent_seed),  # Use independent seed for agents
         )
     elif agent_type == "sharing":
         agents = create_graph_sharing_monte_carlo_agents(
@@ -1046,10 +1287,121 @@ def main(
             w_v=w_v,
             discount_factor=0.95,
             event_utility=event_utility,
-            rng=np.random.default_rng(seed),
+            rng=np.random.default_rng(agent_seed),  # Use independent seed for agents
         )
+    elif agent_type == "ctde":
+        if not CTDE_AVAILABLE:
+            raise ImportError(
+                "CTDE agents require PyTorch. Install with: pip install torch\n"
+                "CTDE agents are not available without PyTorch."
+            )
+        # CTDE agents require training first before execution
+        print("\n" + "="*70)
+        print("CTDE AGENTS: Training Phase")
+        print("="*70)
+        
+        try:
+            # Create training environment (separate from evaluation environment)
+            # Handle None seed case
+            training_env_seed = (seed + 10000) if seed is not None else None
+            if training_env_seed is None:
+                import time
+                training_env_seed = int(time.time() * 1000000) % (2**31)
+            
+            training_env = create_graph_environment(
+                num_nodes=num_nodes,
+                mode=mode,
+                seed=training_env_seed,  # Use different seed for training
+            )
+            training_env.reset(initial_events=5)
+            
+            # Create agents with shared networks
+            agents = create_graph_ctde_agents(
+                num_nodes=num_nodes,
+                num_agents=num_agents,
+                rng=np.random.default_rng(agent_seed),
+            )
+            
+            # Set agents to training mode
+            for agent in agents:
+                agent.training_mode = True
+                agent.deterministic_execution = False  # Sample during training
+            
+            # Create trainer
+            # train_ctde_agents and CTDETrainer should already be imported at module level
+            # But verify they're available (they should be if CTDE_AVAILABLE is True)
+            if not CTDE_AVAILABLE or train_ctde_agents is None or CTDETrainer is None:
+                raise ImportError("CTDE training functions not available. Check imports.")
+            
+            trainer = CTDETrainer(
+                actor_network=agents[0].actor_network,
+                critic_network=agents[0].critic_network,
+                actor_lr=3e-4,
+                critic_lr=3e-4,
+                gamma=0.95,
+                lambda_gae=0.95,
+                clip_epsilon=0.2,
+                entropy_coef=0.01,
+            )
+            
+            # Train agents
+            print(f"Training CTDE agents for 50 episodes ({num_steps} steps per episode)...")
+            print(f"Update frequency: every 5 episodes, {5} update iterations per update")
+            training_stats = train_ctde_agents(
+                env=training_env,
+                agents=agents,
+                trainer=trainer,
+                num_episodes=50,  # Training episodes
+                steps_per_episode=num_steps,  # Same as evaluation
+                update_frequency=5,  # Update every 5 episodes
+                num_updates=5,  # 5 update iterations per update
+                w_h=w_h,
+                w_v=w_v,
+                event_utility=event_utility,
+                verbose=True,
+            )
+            
+            print(f"\n" + "="*70)
+            print("Training completed!")
+            print("="*70)
+            if len(training_stats['episode_rewards']) >= 10:
+                avg_last_10 = np.mean(training_stats['episode_rewards'][-10:])
+                print(f"Average episode reward (last 10 episodes): {avg_last_10:.2f}")
+            if len(training_stats['episode_rewards']) > 0:
+                print(f"Final episode reward: {training_stats['episode_rewards'][-1]:.2f}")
+                print(f"Best episode reward: {max(training_stats['episode_rewards']):.2f}")
+                if len(training_stats['policy_losses']) > 0:
+                    print(f"Final policy loss: {training_stats['policy_losses'][-1]:.4f}")
+                if len(training_stats['value_losses']) > 0:
+                    print(f"Final value loss: {training_stats['value_losses'][-1]:.4f}")
+            print("="*70)
+            print("\nCTDE AGENTS: Execution Phase (using trained networks)")
+            print("="*70)
+            
+            # Reset agent beliefs for execution (training may have modified them)
+            for agent in agents:
+                agent.belief.reset()
+            
+            # Set execution mode (deterministic argmax)
+            for agent in agents:
+                agent.training_mode = False
+                agent.deterministic_execution = True
+                
+        except Exception as e:
+            print(f"\n" + "="*70)
+            print("FATAL ERROR during CTDE training!")
+            print("="*70)
+            print(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
+            print("="*70)
+            print("\nTraining failed. Exiting...")
+            raise RuntimeError(f"CTDE training failed: {e}") from e
     else:
-        raise ValueError(f"Unknown agent_type: {agent_type}. Must be 'monte_carlo', 'random', 'greedy', or 'sharing'")
+        raise ValueError(
+            f"Unknown agent_type: {agent_type}. "
+            f"Must be 'monte_carlo', 'random', 'greedy', 'sharing', or 'ctde'"
+        )
     
     # Create simulation
     sim = GraphSimulation(
@@ -1351,14 +1703,22 @@ if __name__ == "__main__":
     num_nodes = 100
     num_agents = 4
     num_steps = 200
-    planning_horizon = 10
-    num_rollouts = 50
+    planning_horizon = 5
+    num_rollouts = 100
     mode = "rsp"
-    seed = 42
+    # Use a random seed for each independent run (based on current time)
+    # Set seed = 42 to reproduce a specific run, or use None for random seed
+    seed = None  # None = random seed based on current time, or set to an integer for reproducibility
+    if seed is None:
+        import time
+        # Use current time in microseconds for better randomness across independent runs
+        seed = int(time.time() * 1000000) % (2**31)  # Use microseconds since epoch as seed
+        print(f"Using random seed: {seed} (set seed=<integer> in __main__ block for reproducibility)")
     animation_interval = 200  # Milliseconds between frames
-    w_h = 0.5  # Weight for information gain (horizon) in reward calculation
-    w_v = 0.5  # Weight for event value in reward calculation
+    w_h = 0.75 # Weight for information gain (horizon) in reward calculation
+    w_v = 0.25  # Weight for event value in reward calculation
     event_utility = {0: 0.1, 1: 0.9}  # Event utility mapping {state: utility}
+    epsilon = 0.2  # Epsilon-greedy exploration probability for Monte Carlo agents (0.0 = no exploration, 1.0 = always random)
     
     # Create environment ONCE before the loop to record evolution
     # All agent types will replay the exact same sequence of environmental changes
@@ -1394,8 +1754,30 @@ if __name__ == "__main__":
     timestamp_path = create_timestamp_folder()
     print(f"\nResults will be saved to: {os.path.abspath(timestamp_path)}")
     
+    # Define agent types to run
+    agent_types = ["ctde", "random", "greedy", "sharing", "monte_carlo"]
+    
+    # Save configuration file
+    config_path = save_config_file(
+        timestamp_path=timestamp_path,
+        num_nodes=num_nodes,
+        num_agents=num_agents,
+        num_steps=num_steps,
+        planning_horizon=planning_horizon,
+        num_rollouts=num_rollouts,
+        mode=mode,
+        seed=seed,
+        animation_interval=animation_interval,
+        w_h=w_h,
+        w_v=w_v,
+        event_utility=event_utility,
+        epsilon=epsilon,
+        agent_types=agent_types,
+    )
+    print(f"Configuration saved to: {os.path.abspath(config_path)}")
+    
     # Run simulation for each agent type with the SAME recorded evolution
-    for agent_type in ["random", "greedy","sharing", "monte_carlo"]:
+    for agent_type in agent_types:
         print(f"\n{'='*70}")
         print(f"Running simulation for {agent_type.upper()} agents (replaying recorded evolution)")
         print(f"{'='*70}")
@@ -1426,5 +1808,6 @@ if __name__ == "__main__":
             w_h=w_h,  # Weight for information gain (horizon)
             w_v=w_v,  # Weight for event value
             event_utility=event_utility,  # Event utility mapping
+            epsilon=epsilon,  # Epsilon-greedy exploration probability
         )
 

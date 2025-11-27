@@ -243,7 +243,13 @@ class Environment:
                 lam = float(lam_map[y, x]) if lam_map is not None else self.rsp.lam
                 beta0 = float(self.beta0_map[y, x]) if self.beta0_map is not None else self.rsp.beta0
                 alpha = float(self.alpha_map[y, x]) if self.alpha_map is not None else self.rsp.alpha
-                p_event = beta0 + lam + alpha * active_neighbors
+                # Use exponential RSP formula (matching Julia, simulation, and belief updates)
+                # Get actual number of neighbors (may be less than 8 for edge cells)
+                neighbors_list = list(self._iter_neighbors(y, x))
+                num_neighbors = len(neighbors_list)
+                norm_active = active_neighbors / num_neighbors if num_neighbors > 0 else 0.0
+                contagion = 1.0 - np.exp(-alpha * norm_active)
+                p_event = 1.0 - np.exp(-(beta0 + lam + contagion))
                 return max(0.0, min(1.0, p_event))
 
     # ---------- RSP ----------
@@ -264,8 +270,10 @@ class Environment:
 
                 # count active neighbors
                 active = 0
-                for ny, nx in self._iter_neighbors(y, x):
+                neighbors_list = list(self._iter_neighbors(y, x))
+                for ny, nx in neighbors_list:
                     active += int(old[ny, nx] == 1)
+                num_neighbors = len(neighbors_list)
 
                 if cur == 1:
                     delta = float(self.persistence_map[y, x]) if self.persistence_map is not None else self.rsp.delta
@@ -274,7 +282,10 @@ class Environment:
                     lam = float(lam_map[y, x]) if lam_map is not None else self.rsp.lam
                     beta0 = float(self.beta0_map[y, x]) if self.beta0_map is not None else self.rsp.beta0
                     alpha = float(self.alpha_map[y, x]) if self.alpha_map is not None else self.rsp.alpha
-                    p_event = beta0 + lam + alpha * active
+                    # Use exponential RSP formula (matching Julia and belief updates)
+                    norm_active = active / num_neighbors if num_neighbors > 0 else 0.0
+                    contagion = 1.0 - np.exp(-alpha * norm_active)
+                    p_event = 1.0 - np.exp(-(beta0 + lam + contagion))
                     p_event = max(0.0, min(1.0, p_event))
 
                 new[y, x] = 1 if self.rng.random() < p_event else 0
@@ -401,7 +412,13 @@ class Environment:
                 lam = float(lam_map[y, x]) if lam_map is not None else self.rsp.lam
                 beta0 = float(self.beta0_map[y, x]) if self.beta0_map is not None else self.rsp.beta0
                 alpha = float(self.alpha_map[y, x]) if self.alpha_map is not None else self.rsp.alpha
-                p_event = beta0 + lam + alpha * active_neighbors
+                # Use exponential RSP formula (matching Julia, simulation, and belief updates)
+                # Get actual number of neighbors (may be less than 8 for edge cells)
+                neighbors_list = list(self._iter_neighbors(y, x))
+                num_neighbors = len(neighbors_list)
+                norm_active = active_neighbors / num_neighbors if num_neighbors > 0 else 0.0
+                contagion = 1.0 - np.exp(-alpha * norm_active)
+                p_event = 1.0 - np.exp(-(beta0 + lam + contagion))
                 return max(0.0, min(1.0, p_event))
 
 

@@ -30,6 +30,7 @@ class GraphMonteCarloAgent(GraphAgent):
     w_v: float = 1.0  # Weight for event detection value term
     event_utility: dict[int, float] = field(default_factory=lambda: {0: 0.0, 1: 1.0})
     discount_factor: float = 0.95
+    epsilon: float = 0.0  # Epsilon-greedy exploration: probability of taking random action
     
     def compute_reward(
         self,
@@ -277,10 +278,11 @@ class GraphMonteCarloAgent(GraphAgent):
 
     def act(self, env: "GraphEnvironment") -> dict[str, Any]:
         """
-        Choose an action based on Monte Carlo planning.
+        Choose an action based on Monte Carlo planning with epsilon-greedy exploration.
         
-        Evaluates different movement actions (moving to neighbor nodes or staying)
-        using Monte Carlo rollouts and selects the one with the highest expected reward.
+        With probability epsilon, takes a random action (exploration).
+        Otherwise, evaluates different movement actions (moving to neighbor nodes or staying)
+        using Monte Carlo rollouts and selects the one with the highest expected reward (exploitation).
         
         This method acts as a wrapper that tries to use Numba-optimized rollouts when available,
         falling back to pure Python implementation otherwise. The interface and return types
@@ -308,6 +310,20 @@ class GraphMonteCarloAgent(GraphAgent):
                 "expected_reward": 0.0,
             }
         
+        # Epsilon-greedy: with probability epsilon, take a random action
+        rng = np.random.default_rng()
+        if self.epsilon > 0.0 and rng.random() < self.epsilon:
+            # Exploration: select random action
+            random_node = available_nodes[rng.integers(len(available_nodes))]
+            # Build all_rewards dictionary with 0 rewards for all actions (since we didn't compute them)
+            all_rewards = {node: 0.0 for node in available_nodes}
+            return {
+                "target_node": random_node,
+                "expected_reward": 0.0,  # Unknown reward for random action
+                "all_rewards": all_rewards,
+            }
+        
+        # Exploitation: use Monte Carlo planning to select optimal action
         # Default horizon if not set in policy
         horizon = self._policy.get("horizon", 5) if self._policy else 5
         

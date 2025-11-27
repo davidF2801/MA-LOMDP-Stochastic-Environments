@@ -277,7 +277,19 @@ class GraphEnvironment:
         return self.adjacency_list.get(node, [])
     
     def reset(self, initial_events: int = 1) -> np.ndarray:
-        """Clear state and initialize `initial_events` random active nodes."""
+        """
+        Reset environment state to initial condition.
+        
+        This method only resets the state (clears all events, reinitializes random events).
+        It does NOT reset environment parameters such as:
+        - RSP parameters (lam, beta0, alpha, delta)
+        - Random number generator seed
+        - Graph structure
+        - Any other environment configuration
+        
+        The environment remains stochastic but uses the same underlying parameters
+        across all resets, ensuring consistent behavior for training and evaluation.
+        """
         self.state.fill(EventState2.NO_EVENT)
         available = None
         if self.blocked_mask is not None:
@@ -369,6 +381,7 @@ class GraphEnvironment:
 
             # Count active neighbors
             active = self.count_active_neighbors(node)
+            num_neighbors = len(self.get_neighbors(node))
 
             if cur == 1:
                 delta = float(self.persistence_map[node]) if self.persistence_map is not None else self.rsp.delta
@@ -377,7 +390,10 @@ class GraphEnvironment:
                 lam = float(self.ignition_map[node]) if self.ignition_map is not None else self.rsp.lam
                 beta0 = float(self.beta0_map[node]) if self.beta0_map is not None else self.rsp.beta0
                 alpha = float(self.alpha_map[node]) if self.alpha_map is not None else self.rsp.alpha
-                p_event = beta0 + lam + alpha * active
+                # Use exponential RSP formula (matching Julia and belief updates)
+                norm_active = active / num_neighbors if num_neighbors > 0 else 0.0
+                contagion = 1.0 - np.exp(-alpha * norm_active)
+                p_event = 1.0 - np.exp(-(beta0 + lam + contagion))
                 p_event = max(0.0, min(1.0, p_event))
 
             new[node] = 1 if self.rng.random() < p_event else 0

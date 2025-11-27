@@ -19,6 +19,12 @@ class GraphGreedyAgent(GraphAgent):
     Unlike Monte Carlo agents, this agent does not perform lookahead planning.
     It evaluates all available neighbor nodes and selects the one with the highest
     immediate reward (information gain + event value).
+    
+    The agent maintains a belief over the environment state (inherited from GraphAgent).
+    The belief is automatically updated after each observation via:
+    - update_belief_from_observation() - updates observed nodes with delta function
+    - evolve_belief_with_environment() - evolves unobserved nodes using transition kernel
+    These methods are called automatically by the simulation in _process_agent_action().
     """
 
     w_h: float = 1.0  # Weight for information gain term
@@ -31,6 +37,9 @@ class GraphGreedyAgent(GraphAgent):
         
         Evaluates all available neighbor nodes and selects the one with the highest
         immediate reward (information gain + event value).
+        
+        Note: Belief should already be updated with observations before this method is called.
+        The belief evolution happens after action selection in the simulation loop.
         
         Args:
             env: GraphEnvironment object

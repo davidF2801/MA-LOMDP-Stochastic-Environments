@@ -107,25 +107,19 @@ class GraphAgent(ABC):
         Evolve belief using the environment's transition kernel.
         
         This implements the belief update formula:
-        - For observed nodes: b_{t+1}(j, x') = δ[x' = o_j] (handled separately)
+        - For observed nodes: b_{t+1}(j, x') = δ[x' = o_j] (handled separately via update_from_observation)
         - For unobserved nodes: b_{t+1}(j, x') = Σ_{x_j} Σ_{x_N(j)} φ_j(x'; x_j, x_N(j)) * 
           b_t(j, x_j) * Π_{l∈N(j)} b_t(l, x_l)
         
+        Note: The belief is already defined over ALL nodes in the environment (initialized in __post_init__),
+        so no initialization step is needed here.
+        
         Args:
             env: GraphEnvironment object with transition kernel
-            observed_nodes: Set of node indices that were observed
+            observed_nodes: Set of node indices that were observed (these nodes are skipped during evolution)
         """
-        # Initialize belief for nodes that might be reachable from observed nodes
-        # (neighbors of observed nodes, and their neighbors)
-        nodes_to_initialize = set(observed_nodes)
-        for node in observed_nodes:
-            nodes_to_initialize.update(env.get_neighbors(node))
-            for neighbor in env.get_neighbors(node):
-                nodes_to_initialize.update(env.get_neighbors(neighbor))
-        
-        self.belief.initialize_nodes(nodes_to_initialize)
-        
         # Evolve beliefs for unobserved nodes using transition kernel
+        # Observed nodes are skipped (they have delta function beliefs set via update_from_observation)
         self.belief.evolve_with_transition_kernel(env, observed_nodes)
     
     def information_gain(
