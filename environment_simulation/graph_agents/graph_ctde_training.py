@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+import copy
 import numpy as np
 
 try:
@@ -201,61 +202,179 @@ def build_centralized_state(
     return state_tensor, positions, centralized_belief
 
 
-def compute_team_reward(
-    centralized_belief: "GraphBelief",
-    env: "GraphEnvironment",
-    joint_action: dict[str, int],
-    w_h: float = 1.0,
-    w_v: float = 1.0,
-    event_utility: Optional[dict[int, float]] = None,
-) -> float:
+def compute_centralized_entropy(belief: "GraphBelief") -> float:
     """
-    Compute team reward over joint action using centralized/ideal belief.
+    Compute average entropy of the centralized belief over all nodes.
     
-    This is the reward that the critic sees during training.
-    
-    r_t = w_h * Σ_{a in joint_action} G(B_ideal, {a}) + w_v * Σ_{a in joint_action} E[value | B_ideal, {a}]
-    
-    where:
-    - B_ideal is the ideal centralized belief (joint observations from all agents)
-    - joint_action is the set of nodes that will be observed by the team
+    H(b) = (1/K) * Σ_k h_k where h_k = -p_k*log(p_k) - (1-p_k)*log(1-p_k)
     
     Args:
-        centralized_belief: GraphBelief object representing the centralized/ideal belief
-                           (or true state converted to belief format)
-        env: GraphEnvironment object
-        joint_action: Dictionary {agent_name: action (target node)}
-        w_h: Weight for information gain
-        w_v: Weight for event value
-        event_utility: Event utility mapping {state: utility}
+        belief: GraphBelief object
         
     Returns:
-        Team reward computed over joint action and centralized belief
+        Average entropy (scalar)
+    """
+    num_nodes = belief.num_nodes
+    if num_nodes == 0:
+        return 0.0
+    
+    total_entropy = belief.entropy()  # Sum over all nodes
+    return total_entropy / num_nodes  # Average
+
+
+def compute_detection_reward(
+    env_state_before: np.ndarray,
+    env_state_after: np.ndarray,
+    observations_at_step: dict[str, dict[int, int]],
+    events: dict[tuple[int, int], dict],
+    current_step: int,
+    env: "GraphEnvironment",
+    event_utility: Optional[dict[int, float]] = None,
+) -> tuple[float, dict[tuple[int, int], dict]]:
+    """
+    Compute detection reward based on events first detected at this timestep.
+    
+    R_det(t) = Σ_{events detected at t} u_e * (1 - NDD_e)
+    
+    where NDD_e = min((det_time - start_time) / E[L_k], 1.0)
+    and E[L_k] = 1/(1 - delta_k) for geometric lifetime.
+    
+    Args:
+        env_state_before: Environment state before env.step() [num_nodes]
+        env_state_after: Environment state after env.step() [num_nodes]
+        observations_at_step: Dict {agent_name: {node: observed_state}}
+        events: Dict {(node_id, start_step): {start_time, det_time, detected, utility, ...}}
+        current_step: Current timestep (after env.step(), so t+1)
+        env: GraphEnvironment object
+        event_utility: Optional utility mapping {state: utility}
+        
+    Returns:
+        Tuple of (detection_reward, updated_events_dict)
     """
     if event_utility is None:
         event_utility = {0: 0.0, 1: 1.0}
     
-    utility_0 = event_utility.get(0, 0.0)
-    utility_1 = event_utility.get(1, 0.0)
+    utility_default = event_utility.get(1, 1.0)
     
-    # Collect all nodes that will be observed by the joint action
-    nodes_to_observe = set(joint_action.values())
+    # Detect new events: state transition 0→1
+    for node in range(len(env_state_before)):
+        if env_state_before[node] == 0 and env_state_after[node] == 1:
+            # New event started
+            event_id = (node, current_step)
+            if event_id not in events:
+                # Get persistence probability for expected lifetime
+                if env.mode == "rsp":
+                    delta = float(env.persistence_map[node]) if env.persistence_map is not None else env.rsp.delta
+                else:  # DBN-2: persistence = 1 - death_rate
+                    delta = 1.0 - env.death_rate
+                
+                E_L = 1.0 / (1.0 - delta) if delta < 1.0 else 1000.0  # Avoid division by zero
+                
+                events[event_id] = {
+                    "node_id": node,
+                    "start_time": current_step,
+                    "det_time": None,
+                    "detected": False,
+                    "utility": utility_default,
+                    "expected_lifetime": E_L,
+                }
     
-    # Compute information gain: entropy reduction from observing these nodes
-    # Information gain = prior entropy (after perfect observation, entropy = 0)
-    info_gain = centralized_belief.entropy(nodes_to_observe)
+    # Detect events that ended: state transition 1→0
+    for event_id, event_info in list(events.items()):
+        node = event_info["node_id"]
+        if env_state_before[node] == 1 and env_state_after[node] == 0:
+            # Event ended (if not already ended)
+            if event_info.get("end_time") is None:
+                event_info["end_time"] = current_step
     
-    # Compute expected event value: Σ_{node in nodes_to_observe} Σ_x B_ideal(node, x) * f(x)
-    event_value = 0.0
-    for node in nodes_to_observe:
-        prob = centralized_belief.get_probability(node, 1)  # P(E=1)
-        # E[value] = P(0) * f(0) + P(1) * f(1)
-        node_value = (1.0 - prob) * utility_0 + prob * utility_1
-        event_value += node_value
+    # Check which events are first detected at this timestep
+    detected_nodes = set()
+    for agent_name, agent_observations in observations_at_step.items():
+        for node, observed_state in agent_observations.items():
+            if observed_state == 1:
+                detected_nodes.add(node)
+    
+    detection_reward = 0.0
+    for node in detected_nodes:
+        # Find active event at this node
+        active_event_id = None
+        for event_id, event_info in events.items():
+            if (event_info["node_id"] == node and 
+                event_info["start_time"] <= current_step and
+                not event_info["detected"] and
+                (event_info.get("end_time") is None or event_info["end_time"] >= current_step)):
+                active_event_id = event_id
+                break
+        
+        if active_event_id is not None:
+            event_info = events[active_event_id]
+            
+            # First detection: compute NDD and reward
+            if not event_info["detected"]:
+                delay = current_step - event_info["start_time"]
+                E_L = event_info["expected_lifetime"]
+                ndd = min(delay / E_L, 1.0) if E_L > 0 else 1.0
+                
+                reward_contribution = event_info["utility"] * (1.0 - ndd)
+                detection_reward += reward_contribution
+                
+                # Mark as detected
+                event_info["detected"] = True
+                event_info["det_time"] = current_step
+    
+    return detection_reward, events
+
+
+def compute_team_reward(
+    centralized_belief_before: "GraphBelief",
+    centralized_belief_after: "GraphBelief",
+    env_state_before: np.ndarray,
+    env_state_after: np.ndarray,
+    observations_at_step: dict[str, dict[int, int]],
+    events: dict[tuple[int, int], dict],
+    current_step: int,
+    env: "GraphEnvironment",
+    w_h: float = 1.0,
+    w_v: float = 1.0,
+    event_utility: Optional[dict[int, float]] = None,
+) -> tuple[float, dict[tuple[int, int], dict]]:
+    """
+    Compute team reward: R_t = w_h * R_entropy(t) + w_v * R_det(t)
+    
+    where:
+    - R_entropy(t) = H(b_{t-1}) - H(b_t) (entropy reduction)
+    - R_det(t) = Σ_{events detected at t} u_e * (1 - NDD_e)
+    
+    Args:
+        centralized_belief_before: Belief before observations at this step
+        centralized_belief_after: Belief after observations at this step
+        env_state_before: Environment state before env.step()
+        env_state_after: Environment state after env.step()
+        observations_at_step: Observations made at this step
+        events: Event tracking dictionary
+        current_step: Current timestep
+        env: GraphEnvironment object
+        w_h: Weight for entropy reduction
+        w_v: Weight for detection
+        event_utility: Optional utility mapping
+        
+    Returns:
+        Tuple of (team_reward, updated_events_dict)
+    """
+    # Compute entropy reduction reward
+    H_before = compute_centralized_entropy(centralized_belief_before)
+    H_after = compute_centralized_entropy(centralized_belief_after)
+    R_entropy = H_before - H_after
+    
+    # Compute detection reward
+    R_det, updated_events = compute_detection_reward(
+        env_state_before, env_state_after, observations_at_step,
+        events, current_step, env, event_utility
+    )
     
     # Total reward
-    reward = w_h * info_gain + w_v * event_value
-    return float(reward)
+    R_t = w_h * R_entropy + w_v * R_det
+    return float(R_t), updated_events
 
 
 def collect_trajectory(
@@ -311,29 +430,81 @@ def collect_trajectory(
     ideal_belief = GraphBelief(num_nodes=env.num_nodes, num_states=2)
     ideal_belief.reset()  # Uniform prior
     
+    # Event tracking: {(node_id, start_step): {start_time, det_time, detected, utility, expected_lifetime}}
+    events: dict[tuple[int, int], dict] = {}
+    
     # Reset environment and agents if needed
     # (Assuming env and agents are already reset)
     
+    # Get initial environment state
+    env_state_before = env.get_state().copy()
+    
     for step in range(num_steps):
-        # STEP 1: Observe current nodes (agents observe where they are)
-        observations_at_step = {}
-        for agent in agents:
-            observed_state = agent.observe_current_node(env)
-            observed_node = agent.current_node
-            observations_at_step[agent.name] = {observed_node: observed_state}
+        # STEP 1: Save belief before acting (for reward computation and critic state)
+        # Create a copy of the belief by manually copying its state
+        ideal_belief_before = GraphBelief(num_nodes=env.num_nodes, num_states=ideal_belief.num_states)
+        ideal_belief_before.probabilities = copy.deepcopy(ideal_belief.probabilities)
+        ideal_belief_before._binary_probs = copy.deepcopy(ideal_belief._binary_probs)
+        ideal_belief_before.valid_nodes = copy.deepcopy(ideal_belief.valid_nodes)
         
         # STEP 2: Update communication info (check if agents can communicate)
         for agent in agents:
             other_agents = [a for a in agents if a.name != agent.name]
             agent.update_communication_info(other_agents, env, step)
         
-        # STEP 3: Update individual agent beliefs with observations
+        # STEP 3: Build local states for all agents (based on current beliefs, positions, AoI)
+        local_states = {}
+        for agent in agents:
+            other_agents = [a for a in agents if a.name != agent.name]
+            local_states[agent.name] = agent.build_local_state(other_agents, step)
+        
+        # STEP 4: Sample actions from current policy (based on local states)
+        joint_action = {}
+        action_log_probs = {}
+        for agent in agents:
+            other_agents = [a for a in agents if a.name != agent.name]
+            action_info = agent.act(env, other_agents, step, return_log_prob=True)
+            joint_action[agent.name] = action_info['action']
+            action_log_probs[agent.name] = action_info['log_prob']
+        
+        # STEP 5: Build centralized state/belief for critic (using belief BEFORE acting)
+        num_nodes = env.num_nodes
+        belief_array = np.zeros((num_nodes, 2), dtype=np.float32)
+        for node in range(num_nodes):
+            prob = ideal_belief_before.get_probability(node, 1)  # P(E=1)
+            belief_array[node, 0] = 1.0 - prob
+            belief_array[node, 1] = prob
+        state_tensor = torch.from_numpy(belief_array)
+        
+        # Agent positions at time t (before action execution)
+        positions = torch.tensor([agent.current_node for agent in agents], dtype=torch.long)
+        
+        # STEP 6: Execute actions (move agents to target nodes)
+        for agent in agents:
+            target_node = joint_action[agent.name]
+            agent.move_to_node(target_node, env)
+        
+        # STEP 7: Environment evolves
+        env.step()
+        env_state_after = env.get_state().copy()
+        
+        # STEP 8: Observe new nodes (agents observe where they moved to)
+        observations_at_step = {}
+        for agent in agents:
+            observed_state = agent.observe_current_node(env)
+            observed_node = agent.current_node
+            observations_at_step[agent.name] = {observed_node: observed_state}
+        
+        # Store observations for this timestep (for bootstrap value computation)
+        observations_history.append(observations_at_step)
+        
+        # STEP 9: Update individual agent beliefs with observations
         # (This handles both own observations and received data from communication)
         for agent in agents:
             observed_state = observations_at_step[agent.name][agent.current_node]
             agent.update_belief_from_observation(env, agent.current_node, observed_state)
         
-        # STEP 4: Update ideal centralized belief with joint observations
+        # STEP 10: Update ideal centralized belief with joint observations
         # Collect all observations from all agents at this timestep
         all_observations_at_step = {}
         for agent_name, agent_observations in observations_at_step.items():
@@ -348,47 +519,25 @@ def collect_trajectory(
             observed_nodes = set(all_observations_at_step.keys())
             ideal_belief.update_from_observation(observed_nodes, all_observations_at_step)
         
-        # Store observations for this timestep (for bootstrap value computation)
-        observations_history.append(observations_at_step)
+        # ideal_belief is now the "after" belief
         
-        # STEP 5: Build local states for all agents (based on updated beliefs, positions, AoI)
-        local_states = {}
-        for agent in agents:
-            other_agents = [a for a in agents if a.name != agent.name]
-            local_states[agent.name] = agent.build_local_state(other_agents, step)
-        
-        # STEP 6: Sample actions from current policy (based on local states)
-        joint_action = {}
-        action_log_probs = {}
-        for agent in agents:
-            other_agents = [a for a in agents if a.name != agent.name]
-            action_info = agent.act(env, other_agents, step, return_log_prob=True)
-            joint_action[agent.name] = action_info['action']
-            action_log_probs[agent.name] = action_info['log_prob']
-        
-        # STEP 7: Build centralized state/belief for critic (after observations and belief updates)
-        # Always use ideal centralized belief (maintained incrementally)
-        num_nodes = env.num_nodes
-        belief_array = np.zeros((num_nodes, 2), dtype=np.float32)
-        for node in range(num_nodes):
-            prob = ideal_belief.get_probability(node, 1)  # P(E=1)
-            belief_array[node, 0] = 1.0 - prob
-            belief_array[node, 1] = prob
-        state_tensor = torch.from_numpy(belief_array)
-        centralized_belief = ideal_belief  # Use the maintained belief
-        
-        # Agent positions
-        positions = torch.tensor([agent.current_node for agent in agents], dtype=torch.long)
-        
-        # STEP 8: Compute team reward over joint action using centralized belief
-        # (same belief that the critic sees)
-        team_reward = compute_team_reward(
-            centralized_belief, env, joint_action, w_h, w_v, event_utility
+        # STEP 11: Compute reward using before/after beliefs and detection
+        # current_step = step + 1 (since we're after env.step())
+        team_reward, events = compute_team_reward(
+            centralized_belief_before=ideal_belief_before,
+            centralized_belief_after=ideal_belief,
+            env_state_before=env_state_before,
+            env_state_after=env_state_after,
+            observations_at_step=observations_at_step,
+            events=events,
+            current_step=step + 1,  # After env.step(), so time is step + 1
+            env=env,
+            w_h=w_h,
+            w_v=w_v,
+            event_utility=event_utility,
         )
         
-        # Get value estimate from critic
-        # Note: All agents share the same critic network instance (it's centralized/shared)
-        # We can access it from any agent (agent[0] is just convenient)
+        # STEP 12: Get value estimate from critic (using "before" belief state)
         shared_critic = agents[0].critic_network
         if shared_critic is not None:
             shared_critic.eval()
@@ -401,13 +550,13 @@ def collect_trajectory(
         else:
             value_estimate = 0.0
         
-        # Get action masks for all agents (for proper masking during updates)
+        # STEP 13: Get action masks for all agents (for proper masking during updates)
         action_masks = {}
         for agent in agents:
             mask = agent.get_action_mask(env)
             action_masks[agent.name] = mask
         
-        # Store in buffer (store positions at this timestep)
+        # STEP 14: Store transition in buffer
         # Mark last step as done for proper episode termination in GAE
         done_flag = (step == num_steps - 1)
         buffer.add(
@@ -422,12 +571,7 @@ def collect_trajectory(
             positions=positions.cpu().numpy(),  # Store positions at this timestep
         )
         
-        # STEP 9: Execute actions (move agents to target nodes)
-        for agent in agents:
-            target_node = joint_action[agent.name]
-            agent.move_to_node(target_node, env)
-        
-        # STEP 10: Evolve beliefs with transition model (after action execution)
+        # STEP 15: Evolve beliefs with transition model (after observation and reward computation)
         for agent in agents:
             agent.evolve_belief_with_environment(env, {agent.current_node})
         
@@ -435,8 +579,8 @@ def collect_trajectory(
         # Evolve all nodes (no nodes are currently observed during evolution)
         ideal_belief.evolve_with_transition_kernel(env, set(), num_states=2)
         
-        # STEP 11: Environment evolves
-        env.step()
+        # Prepare for next iteration
+        env_state_before = env_state_after.copy()
     
     # Return buffer, observations_history, and final ideal_belief/positions for bootstrap
     # Final positions after last action execution

@@ -83,45 +83,62 @@ def create_graph_environment(
     
     # Create parameter maps (2D grid format, will be flattened)
     if mode == "rsp":
-        # Create clustered ignition map with slower evolution
-        lam_map = 0.002 * np.ones((height, width))  # Reduced for slower evolution
-        # Add some spatial variation
-        y_coords, x_coords = np.mgrid[0:height, 0:width].astype(float)
-        for center_y, center_x, amp, spread in [
-            (height * 0.3, width * 0.2, 0.004, width * 0.18),  # Reduced
-            (height * 0.7, width * 0.6, 0.003, width * 0.22),  # Reduced
-            (height * 0.5, width * 0.45, 0.003, width * 0.16),  # Reduced
-        ]:
-            dist = (y_coords - center_y) ** 2 + (x_coords - center_x) ** 2
-            lam_map += amp * np.exp(-dist / spread)
-        lam_map += 0.001 * base_rng.random((height, width))  # Reduced
-        
-        # Reduced alpha (contagion) for slower propagation
-        alpha_map = 0.01 + 0.008 * np.cos(y_coords / height * np.pi) ** 4  # Reduced
-        alpha_map += 0.004 * base_rng.random((height, width))  # Reduced
-        
-        # Reduced beta0 (spontaneous birth) for slower event creation
-        beta0_map = 0.0003 + 0.0002 * base_rng.random((height, width))  # Reduced
-        
-        persistence_map = 0.94 + 0.04 * np.cos(y_coords / height * np.pi)  # Adjusted
-        persistence_map += 0.01 * base_rng.random((height, width))  # Reduced variation
-        persistence_map = np.clip(persistence_map, 0.90, 0.98)  # Adjusted range
-        
-        # Create blocked mask with more blocked cells that will never ignite
-        blocked_mask = np.zeros((height, width), dtype=bool)
-        # Add permanent blocked strip
-        blocked_mask[:, : width // 18] = True
-        # Add random blocked cells (increased from 0.03 to 0.08 for more blocked cells)
-        blocked_mask |= base_rng.random((height, width)) < 0.08
-        # Add some blocked regions (clusters)
-        for center_y, center_x, radius in [
-            (height * 0.25, width * 0.75, width * 0.12),
-            (height * 0.75, width * 0.25, width * 0.10),
-            (height * 0.6, width * 0.8, width * 0.08),
-        ]:
-            y_grid, x_grid = np.mgrid[0:height, 0:width]
-            dist = np.sqrt((y_grid - center_y) ** 2 + (x_grid - center_x) ** 2)
-            blocked_mask |= dist < radius
+        y_coords, x_coords = np.mgrid[0:height, 0:width]
+
+        # 1) Define biome labels: 0=desert, 1=forest, 2=grass, 3=blocked
+        biome = np.zeros((height, width), dtype=int)
+
+        # horizontal bands for simplicity
+        h1 = int(0.3 * height)
+        h2 = int(0.6 * height)
+
+        # top band: quiet desert
+        biome[:h1, :] = 0
+        # middle band: hotspot forest
+        biome[h1:h2, :] = 1
+        # bottom band: flash grassland
+        biome[h2:, :] = 2
+
+        # some blocked islands
+        biome[height//4-2:height//4+3, width//3-2:width//3+3] = 3
+        biome[3*height//4-2:3*height//4+3, 2*width//3-2:2*width//3+3] = 3
+
+        base_rng = np.random.default_rng(seed)
+
+        lam_map         = np.zeros((height, width))
+        alpha_map       = np.zeros((height, width))
+        beta0_map       = np.zeros((height, width))
+        persistence_map = np.zeros((height, width))
+        blocked_mask    = np.zeros((height, width), dtype=bool)
+
+        # (A) quiet desert
+        mask = (biome == 0)
+        lam_map[mask]         = 5e-4  * (1.0 + 0.3 * base_rng.random(mask.sum()))
+        alpha_map[mask]       = 5e-3  * (1.0 + 0.3 * base_rng.random(mask.sum()))
+        beta0_map[mask]       = 1e-4  * (1.0 + 0.3 * base_rng.random(mask.sum()))
+        persistence_map[mask] = 0.80  + 0.03 * base_rng.random(mask.sum())
+
+        # (B) hotspot forest
+        mask = (biome == 1)
+        lam_map[mask]         = 5e-3  * (1.0 + 0.3 * base_rng.random(mask.sum()))
+        alpha_map[mask]       = 8e-2  * (1.0 + 0.3 * base_rng.random(mask.sum()))
+        beta0_map[mask]       = 5e-4  * (1.0 + 0.3 * base_rng.random(mask.sum()))
+        persistence_map[mask] = 0.95  + 0.02 * base_rng.random(mask.sum())
+
+        # (C) flash grassland
+        mask = (biome == 2)
+        lam_map[mask]         = 3e-3  * (1.0 + 0.3 * base_rng.random(mask.sum()))
+        alpha_map[mask]       = 5e-2  * (1.0 + 0.3 * base_rng.random(mask.sum()))
+        beta0_map[mask]       = 3e-4  * (1.0 + 0.3 * base_rng.random(mask.sum()))
+        persistence_map[mask] = 0.75  + 0.03 * base_rng.random(mask.sum())
+
+        # (D) blocked
+        mask = (biome == 3)
+        blocked_mask[mask] = True
+        lam_map[mask]      = 0.0
+        alpha_map[mask]    = 0.0
+        beta0_map[mask]    = 0.0
+        persistence_map[mask] = 0.0
         
         # Reduced base RSP parameters for slower evolution
         env = GraphEnvironment(
@@ -1351,7 +1368,7 @@ def main(
                 env=training_env,
                 agents=agents,
                 trainer=trainer,
-                num_episodes=50,  # Training episodes
+                num_episodes=200,  # Training episodes
                 steps_per_episode=num_steps,  # Same as evaluation
                 update_frequency=5,  # Update every 5 episodes
                 num_updates=5,  # 5 update iterations per update
@@ -1378,14 +1395,31 @@ def main(
             print("\nCTDE AGENTS: Execution Phase (using trained networks)")
             print("="*70)
             
+            # Store references to trained networks for saving and verification
+            trained_actor_network = agents[0].actor_network
+            trained_critic_network = agents[0].critic_network
+            
             # Reset agent beliefs for execution (training may have modified them)
             for agent in agents:
                 agent.belief.reset()
             
             # Set execution mode (deterministic argmax)
+            # IMPORTANT: These are the SAME agents from training, so they already have trained networks
             for agent in agents:
                 agent.training_mode = False
                 agent.deterministic_execution = True
+            
+            # Verify agents are using the trained networks (should be the same instances)
+            assert all(agent.actor_network is trained_actor_network for agent in agents), \
+                "ERROR: Agents should share the same trained actor network!"
+            assert all(agent.critic_network is trained_critic_network for agent in agents), \
+                "ERROR: Agents should share the same trained critic network!"
+            print("✓ Verified: Execution will use trained networks from training phase")
+            
+            # Store flag and networks for saving once results directory is created
+            _save_ctde_networks = True
+            _ctde_networks_actor = trained_actor_network
+            _ctde_networks_critic = trained_critic_network
                 
         except Exception as e:
             print(f"\n" + "="*70)
@@ -1434,6 +1468,56 @@ def main(
             os.makedirs(agent_type_dir, exist_ok=True)
             animation_path = os.path.join(agent_type_dir, "animation_graph.gif")
             print(f"Created results directory: {agent_type_dir}")
+            
+            # Save trained CTDE networks if this is a CTDE run and training completed
+            if agent_type == "ctde" and CTDE_AVAILABLE:
+                try:
+                    if '_save_ctde_networks' in locals() and _save_ctde_networks:
+                        import torch
+                        # Save actor and critic networks to results directory
+                        actor_path = os.path.join(agent_type_dir, "trained_actor_network.pt")
+                        critic_path = os.path.join(agent_type_dir, "trained_critic_network.pt")
+                        
+                        if '_ctde_networks_actor' in locals() and _ctde_networks_actor is not None:
+                            torch.save(_ctde_networks_actor.state_dict(), actor_path)
+                            print(f"✓ Saved trained actor network to: {actor_path}")
+                        if '_ctde_networks_critic' in locals() and _ctde_networks_critic is not None:
+                            torch.save(_ctde_networks_critic.state_dict(), critic_path)
+                            print(f"✓ Saved trained critic network to: {critic_path}")
+                except (NameError, AttributeError):
+                    # Networks not available (training might have failed)
+                    pass
+                except Exception as e:
+                    print(f"⚠ Warning: Failed to save trained networks: {e}")
+        
+        # Also save networks even if animation is disabled (create directory if needed)
+        elif agent_type == "ctde" and CTDE_AVAILABLE:
+            try:
+                if '_save_ctde_networks' in locals() and _save_ctde_networks:
+                    import torch
+                    # Determine save directory
+                    if results_timestamp_path is not None:
+                        save_dir = os.path.join(results_timestamp_path, agent_type)
+                    else:
+                        save_dir = os.path.join(create_timestamp_folder(), agent_type)
+                    
+                    os.makedirs(save_dir, exist_ok=True)
+                    
+                    # Save actor and critic networks
+                    actor_path = os.path.join(save_dir, "trained_actor_network.pt")
+                    critic_path = os.path.join(save_dir, "trained_critic_network.pt")
+                    
+                    if '_ctde_networks_actor' in locals() and _ctde_networks_actor is not None:
+                        torch.save(_ctde_networks_actor.state_dict(), actor_path)
+                        print(f"✓ Saved trained actor network to: {actor_path}")
+                    if '_ctde_networks_critic' in locals() and _ctde_networks_critic is not None:
+                        torch.save(_ctde_networks_critic.state_dict(), critic_path)
+                        print(f"✓ Saved trained critic network to: {critic_path}")
+            except (NameError, AttributeError):
+                # Networks not available (training might have failed)
+                pass
+            except Exception as e:
+                print(f"⚠ Warning: Failed to save trained networks: {e}")
         
         animation_path_used = os.path.abspath(animation_path)
         results_base_path = os.path.dirname(animation_path_used) if animation_path_used else None
@@ -1715,9 +1799,9 @@ if __name__ == "__main__":
         seed = int(time.time() * 1000000) % (2**31)  # Use microseconds since epoch as seed
         print(f"Using random seed: {seed} (set seed=<integer> in __main__ block for reproducibility)")
     animation_interval = 200  # Milliseconds between frames
-    w_h = 0.75 # Weight for information gain (horizon) in reward calculation
-    w_v = 0.25  # Weight for event value in reward calculation
-    event_utility = {0: 0.1, 1: 0.9}  # Event utility mapping {state: utility}
+    w_h = 0.0 # Weight for information gain (horizon) in reward calculation
+    w_v = 4.0  # Weight for event value in reward calculation
+    event_utility = {0: 0.0, 1: 1.0}  # Event utility mapping {state: utility}
     epsilon = 0.2  # Epsilon-greedy exploration probability for Monte Carlo agents (0.0 = no exploration, 1.0 = always random)
     
     # Create environment ONCE before the loop to record evolution
