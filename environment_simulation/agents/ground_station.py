@@ -12,7 +12,9 @@ class GroundStation:
     Ground station located at orbit intersection points.
     
     Stores observations received from satellites over time.
-    Observations are stored as dictionaries mapping (lat, lon) -> observed state (0 or 1).
+    Observations are stored as dictionaries mapping (lat, lon) -> observed state.
+    For binary mode: state is 0 or 1.
+    For kernel mode: state is 0 (unburned), 1 (burning), or 2 (burned).
     """
     
     name: str
@@ -41,7 +43,7 @@ class GroundStation:
         Args:
             agent_id: Identifier of the satellite/agent making the observation
             timestep: Time step when the observation was made
-            observation: Dictionary mapping (lat, lon) tuples to observed state values (0 or 1)
+            observation: Dictionary mapping (lat, lon) tuples to observed state values (0, 1, or 2 for kernel mode)
         """
         key = (agent_id, timestep)
         self.observations[key] = observation.copy()  # Store a copy to avoid reference issues

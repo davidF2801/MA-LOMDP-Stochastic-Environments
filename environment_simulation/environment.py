@@ -26,10 +26,11 @@ class Environment:
     2D binary event map updated by:
       - mode='dbn2': birth/death + neighbor influence
       - mode='rsp' : Díaz–Avalos random spread process
+      - mode='kernel': Learned transition kernel from fire physics (3 states: unburned, burning, burned)
 
     Args:
         width, height: grid size (latitude × longitude)
-        mode: 'dbn2' or 'rsp'
+        mode: 'dbn2', 'rsp', 'viirs_table', or 'kernel'
         topology: 'plane' for bounded grid, 'sphere' for wrap-around Earth-like surface
         birth_rate, death_rate, neighbor_influence: DBN-2 params
         rsp_params: RSPParams
@@ -37,6 +38,9 @@ class Environment:
         beta0_map, alpha_map, persistence_map: optional per-cell overrides for RSP parameters
         blocked_mask: optional boolean (H,W) mask of cells that can never ignite
         seed: RNG seed
+        transition_table: optional (512,) transition probability table for viirs_table mode
+        kernel_learner: optional TransitionKernelLearner for 'kernel' mode
+        material_map: optional dict mapping (y, x) -> Material for 'kernel' mode
     """
     def __init__(
         self,
@@ -55,8 +59,10 @@ class Environment:
         blocked_mask: Optional[np.ndarray] = None,
         seed: int = 0,
         transition_table: Optional[np.ndarray] = None,
+        kernel_learner: Optional["TransitionKernelLearner"] = None,
+        material_map: Optional[dict[tuple[int, int], "Material"]] = None,
     ):
-        assert mode in ("dbn2", "rsp", "viirs_table")
+        assert mode in ("dbn2", "rsp", "viirs_table", "kernel")
         assert topology in ("plane", "sphere"), "topology must be 'plane' or 'sphere'"
         self.width = width
         self.height = height
@@ -89,7 +95,9 @@ class Environment:
 
         self.rng = np.random.default_rng(seed)
         self.time = 0
-        self.state = np.zeros((height, width), dtype=np.int8)  # ground truth: 0/1
+        # For kernel mode: state can be 0/1/2 (unburned/burning/burned)
+        # For other modes: state is 0/1 (no event/event)
+        self.state = np.zeros((height, width), dtype=np.int8)  # ground truth: 0/1 or 0/1/2
         
         # For viirs_table mode: 512-pattern transition probability table
         self.transition_table = transition_table
@@ -105,11 +113,22 @@ class Environment:
                 (0, -1),           (0, 1),
                 (1, -1),  (1, 0),  (1, 1),
             ]
+        
+        # For kernel mode: learned transition kernel and material map
+        self.kernel_learner = kernel_learner
+        self.material_map = material_map
+        if mode == "kernel":
+            if kernel_learner is None:
+                raise ValueError("kernel_learner must be provided for mode='kernel'")
+            if material_map is None:
+                raise ValueError("material_map must be provided for mode='kernel'")
 
     # ---------- utilities ----------
     def reset(self, initial_events: int = 1) -> np.ndarray:
         """Clear grid and drop `initial_events` random active cells."""
-        self.state.fill(EventState2.NO_EVENT)
+        # For kernel mode: state 0 = unburned, 1 = burning, 2 = burned
+        # For other modes: state 0 = no event, 1 = event
+        self.state.fill(0)
         available = None
         if self.blocked_mask is not None:
             available = np.argwhere(~self.blocked_mask)
@@ -125,7 +144,8 @@ class Environment:
                 x = self.rng.integers(0, self.width)
             if self.blocked_mask is not None and self.blocked_mask[y, x]:
                 continue
-            self.state[y, x] = EventState2.EVENT_PRESENT
+            # For kernel mode: set to state 1 (burning), for other modes: set to 1 (event)
+            self.state[y, x] = 1
         self.time = 0
         return self.state.copy()
 
@@ -174,6 +194,8 @@ class Environment:
             self._step_rsp()
         elif self.mode == "viirs_table":
             self._step_viirs_table()
+        elif self.mode == "kernel":
+            self._step_kernel()
         else:
             self._step_dbn2()
         self.time += 1
@@ -351,6 +373,104 @@ class Environment:
 
         self.state = new
 
+    # ---------- kernel mode (learned fire physics) ----------
+    def _step_kernel(self):
+        """
+        Update using learned transition kernel.
+        
+        For each cell, samples next state based on:
+        - Current state s (0=unburned, 1=burning, 2=burned)
+        - Material m
+        - Number of burning neighbors k' (counted from current state)
+        - Learned transition probabilities P(s' | s, m, k')
+        
+        All cells are updated synchronously - we use state_before
+        for all neighbor counts, then update all states at once.
+        """
+        H, W = self.state.shape
+        state_before = self.state.copy()
+        state_after = np.zeros((H, W), dtype=np.int8)
+        
+        # Compute next state for each cell
+        for y in range(H):
+            for x in range(W):
+                current_state = int(state_before[y, x])
+                
+                # Skip blocked cells (should be WATER, but handle gracefully)
+                if self.blocked_mask is not None and self.blocked_mask[y, x]:
+                    state_after[y, x] = 0  # Unburned
+                    continue
+                
+                # Get material for this cell
+                cell_key = (y, x)
+                if cell_key not in self.material_map:
+                    # Fallback: treat as WATER if material not specified
+                    state_after[y, x] = current_state  # Stay in current state
+                    continue
+                
+                material = self.material_map[cell_key]
+                
+                # Count burning neighbors from current state (state == 1 means burning)
+                num_burning_neighbors = 0
+                for ny, nx in self._iter_neighbors(y, x):
+                    if state_before[ny, nx] == 1:  # Neighbor is burning
+                        num_burning_neighbors += 1
+                
+                # Get transition probabilities from kernel
+                transition_probs = {
+                    s_prime: self.kernel_learner.get_transition_probability(
+                        current_state, material, num_burning_neighbors, s_prime
+                    )
+                    for s_prime in range(3)
+                }
+                
+                # ENFORCE PHYSICAL CONSTRAINTS: Set impossible transitions to 0
+                # - UNBURNED (0) → BURNED (2): Must be 0
+                # - BURNING (1) → UNBURNED (0): Must be 0
+                # - BURNED (2) → BURNING (1): Must be 0
+                if current_state == 0:  # UNBURNED
+                    transition_probs[2] = 0.0  # Cannot go directly to BURNED
+                elif current_state == 1:  # BURNING
+                    transition_probs[0] = 0.0  # Cannot go directly to UNBURNED
+                elif current_state == 2:  # BURNED
+                    transition_probs[1] = 0.0  # Cannot go to BURNING
+                
+                # Determine valid next states based on current state
+                if current_state == 0:  # UNBURNED → {0, 1}
+                    valid_next_states = [0, 1]
+                elif current_state == 1:  # BURNING → {1, 2}
+                    valid_next_states = [1, 2]
+                else:  # BURNED → {0, 2}
+                    valid_next_states = [0, 2]
+                
+                # Sample next state from the distribution
+                # Only use valid next states
+                probs = [transition_probs.get(s, 0.0) for s in valid_next_states]
+                
+                # Normalize over valid states only
+                probs = np.array(probs, dtype=np.float64)
+                prob_sum = probs.sum()
+                
+                if prob_sum > 0:
+                    probs = probs / prob_sum
+                else:
+                    # Fallback: uniform distribution over valid states if all probabilities are 0
+                    probs = np.ones(len(valid_next_states)) / len(valid_next_states)
+                
+                # Ensure probabilities are valid (non-negative, sum to 1)
+                probs = np.clip(probs, 0.0, 1.0)
+                prob_sum = probs.sum()
+                if prob_sum > 0:
+                    probs = probs / prob_sum
+                else:
+                    probs = np.ones(len(valid_next_states)) / len(valid_next_states)
+                
+                # Sample next state
+                next_state_idx = self.rng.choice(len(valid_next_states), p=probs)
+                state_after[y, x] = valid_next_states[next_state_idx]
+        
+        self.state = state_after
+
     # ---------- transition kernel for belief updates ----------
     def transition_probability(self, y: int, x: int, current_state: int, active_neighbors: int) -> float:
         """
@@ -369,6 +489,37 @@ class Environment:
         """
         if self.blocked_mask is not None and self.blocked_mask[y, x]:
             return 0.0
+        
+        if self.mode == "kernel":
+            # For kernel mode, return probability of being in state 1 (burning) next step
+            # This is a simplified version - full kernel mode would need 3-state belief
+            # For now, approximate by using kernel to get P(s'=1 | s, m, k')
+            cell_key = (y, x)
+            if cell_key not in self.material_map:
+                return 0.0
+            
+            material = self.material_map[cell_key]
+            
+            # Count burning neighbors (state == 1)
+            num_burning_neighbors = active_neighbors  # active_neighbors counts state==1
+            
+            # Get probability of transitioning to state 1 (burning)
+            # Note: This is a simplification - full 3-state belief would be better
+            if current_state == 0:  # UNBURNED
+                # P(s'=1 | s=0, m, k')
+                prob = self.kernel_learner.get_transition_probability(
+                    current_state, material, num_burning_neighbors, 1
+                )
+            elif current_state == 1:  # BURNING
+                # P(s'=1 | s=1, m, k')
+                prob = self.kernel_learner.get_transition_probability(
+                    current_state, material, num_burning_neighbors, 1
+                )
+            else:  # BURNED (state == 2)
+                # P(s'=1 | s=2, m, k') = 0 (can't go directly to burning from burned)
+                prob = 0.0
+            
+            return max(0.0, min(1.0, prob))
         
         if self.mode == "viirs_table":
             # Approximation: use average probability over patterns with given center state and neighbor count

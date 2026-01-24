@@ -197,10 +197,14 @@ class Belief:
     Since each agent has a fixed periodic trajectory and a fixed sensor Field of Regard (FOR),
     we only maintain beliefs for cells that the agent will actually observe.
     
-    The belief is stored as a dictionary mapping (lat, lon) -> P(E_j(t) = 1), where:
-    - Keys: (lat, lon) tuples representing cell locations
-    - Values: P(E_j(t) = 1) = probability of event at that location
-    - For binary states {0, 1}: P(E_j(t) = 0) = 1 - P(E_j(t) = 1)
+    For binary states (num_states=2):
+    - The belief is stored as a dictionary mapping (lat, lon) -> P(E_j(t) = 1)
+    - P(E_j(t) = 0) = 1 - P(E_j(t) = 1)
+    
+    For 3-state kernel mode (num_states=3):
+    - The belief stores probabilities for all states: (lat, lon, state) -> P(state)
+    - States: 0=unburned, 1=burning, 2=burned
+    - Backward compatibility: _binary_probs stores P(state=1) for compatibility
     
     The belief is updated according to:
     - If cell j is observed: b_{t+1}^e(j, x') = δ[x' = o_j] (delta function)
@@ -210,47 +214,87 @@ class Belief:
 
     height: int
     width: int
-    # Dictionary mapping (lat, lon) -> P(E_j = 1)
-    # Only contains cells that have valid beliefs (observed or in field of regard)
+    # Dictionary mapping (lat, lon) -> P(E_j = 1) for binary mode (backward compatibility)
+    # For 3-state mode: use state_probs instead
     probabilities: dict[tuple[float, float], float] = field(init=False, default_factory=dict)
+    # Dictionary mapping (lat, lon, state) -> P(state) for 3-state mode
+    state_probs: dict[tuple[float, float, int], float] = field(init=False, default_factory=dict)
     # Set of (lat, lon) tuples that have valid beliefs
     valid_locations: set[tuple[float, float]] = field(init=False, default_factory=set)
-    # Prior probability for unobserved cells
+    # Prior probability for unobserved cells (for binary mode)
     prior_probability: float = 0.5
-    # Number of states (M) - currently binary (2) but kept for future generalization
+    # Number of states (M) - 2 for binary, 3 for kernel mode
     num_states: int = 2
 
     def __post_init__(self):
         """Initialize belief dictionary."""
         self.probabilities = {}
+        self.state_probs = {}
         self.valid_locations = set()
     
-    def get_probability(self, lat: float, lon: float) -> float:
+    def get_probability(self, lat: float, lon: float, state: Optional[int] = None) -> float:
         """
-        Get probability P(E_j = 1) for a specific (lat, lon) location.
+        Get probability for a specific (lat, lon) location.
         
         Args:
             lat: Latitude in degrees
             lon: Longitude in degrees
+            state: State index (0, 1, or 2). If None, returns P(state=1) for backward compatibility.
             
         Returns:
-            Probability P(E_j = 1). Returns prior_probability if location not in belief.
+            Probability P(state) for 3-state mode, or P(E_j = 1) for binary mode.
+            Returns prior_probability/num_states if location not in belief.
         """
         key = (lat, lon)
-        return self.probabilities.get(key, self.prior_probability)
+        if self.num_states > 2:
+            if state is None:
+                # Backward compatibility: return P(state=1) for binary compatibility
+                return self.state_probs.get((lat, lon, 1), 1.0 / self.num_states)
+            else:
+                return self.state_probs.get((lat, lon, state), 1.0 / self.num_states)
+        else:
+            # Binary mode: state parameter ignored
+            return self.probabilities.get(key, self.prior_probability)
     
-    def set_probability(self, lat: float, lon: float, prob: float) -> None:
+    def set_probability(self, lat: float, lon: float, prob: float, state: Optional[int] = None) -> None:
         """
-        Set probability P(E_j = 1) for a specific (lat, lon) location.
+        Set probability for a specific (lat, lon) location.
         
         Args:
             lat: Latitude in degrees
             lon: Longitude in degrees
-            prob: Probability P(E_j = 1), must be in [0, 1]
+            prob: Probability, must be in [0, 1]
+            state: State index (0, 1, or 2). If None, sets P(state=1) for backward compatibility.
         """
         key = (lat, lon)
         prob = float(np.clip(prob, 0.0, 1.0))
-        self.probabilities[key] = prob
+        
+        if self.num_states > 2:
+            if state is None:
+                # Backward compatibility: set P(state=1) and infer others
+                # For n-state mode, this is an approximation
+                self.state_probs[(lat, lon, 1)] = prob
+                # Distribute remaining probability uniformly among other states
+                remaining_prob = 1.0 - prob
+                for s in range(self.num_states):
+                    if s != 1:
+                        self.state_probs[(lat, lon, s)] = remaining_prob / (self.num_states - 1)
+            else:
+                self.state_probs[(lat, lon, state)] = prob
+                # Normalize probabilities to sum to 1
+                total = sum(self.state_probs.get((lat, lon, s), 0.0) for s in range(self.num_states))
+                if total > 1e-10:
+                    for s in range(self.num_states):
+                        if (lat, lon, s) in self.state_probs:
+                            self.state_probs[(lat, lon, s)] /= total
+                else:
+                    # Uniform prior if all zero
+                    for s in range(self.num_states):
+                        self.state_probs[(lat, lon, s)] = 1.0 / self.num_states
+        else:
+            # Binary mode: state parameter ignored
+            self.probabilities[key] = prob
+        
         self.valid_locations.add(key)
     
     def has_location(self, lat: float, lon: float) -> bool:
@@ -272,8 +316,8 @@ class Belief:
         Args:
             observation_mask: Boolean (H, W) mask indicating which cells were observed
             observations: Either:
-                - Integer (H, W) array of observed states (0=no event, 1=event), OR
-                - Dictionary mapping (lat, lon) -> observed state (0 or 1) for cells in observation_mask
+                - Integer (H, W) array of observed states (0, 1, or 2 for kernel mode), OR
+                - Dictionary mapping (lat, lon) -> observed state (0, 1, or 2) for cells in observation_mask
             lat_grid: (H, W) array of latitude values in degrees
             lon_grid: (H, W) array of longitude values in degrees
         """
@@ -283,8 +327,16 @@ class Belief:
         if isinstance(observations, dict):
             # Update from dictionary: (lat, lon) -> state
             for (lat, lon), observed_state in observations.items():
-                # Set to delta function: P(E_j = 1) = observed_state (0 or 1)
-                self.set_probability(lat, lon, float(observed_state))
+                observed_state = int(observed_state)
+                if self.num_states > 2:
+                    # Multi-state mode: set delta function for observed state
+                    for s in range(self.num_states):
+                        self.state_probs[(lat, lon, s)] = 1.0 if s == observed_state else 0.0
+                    # Do NOT update probabilities dict in multi-state mode
+                else:
+                    # Binary mode: P(E_j = 1) = observed_state (0 or 1)
+                    self.set_probability(lat, lon, float(observed_state))
+                self.valid_locations.add((lat, lon))
         else:
             # Update from array: find (lat, lon) for each observed cell
             observations = np.asarray(observations, dtype=int)
@@ -295,8 +347,15 @@ class Belief:
                     if observation_mask[y, x]:
                         lat, lon = lat_grid[y, x], lon_grid[y, x]
                         observed_state = int(observations[y, x])
-                        # Set to delta function: P(E_j = 1) = observed_state (0 or 1)
-                        self.set_probability(lat, lon, float(observed_state))
+                        if self.num_states > 2:
+                            # Multi-state mode: set delta function for observed state
+                            for s in range(self.num_states):
+                                self.state_probs[(lat, lon, s)] = 1.0 if s == observed_state else 0.0
+                            # Do NOT update probabilities dict in multi-state mode
+                        else:
+                            # Binary mode: P(E_j = 1) = observed_state (0 or 1)
+                            self.set_probability(lat, lon, float(observed_state))
+                        self.valid_locations.add((lat, lon))
 
     def get_belief_in_region(
         self, 
@@ -344,8 +403,8 @@ class Belief:
         """
         Compute Shannon entropy of the belief.
         
-        For a binary state, entropy is: H(b) = -p*log2(p) - (1-p)*log2(1-p)
-        where p is the probability of event=1.
+        For binary state: H(b) = -p*log2(p) - (1-p)*log2(1-p) where p is P(state=1).
+        For 3-state mode: H(b) = -Σ_s p_s*log2(p_s) where p_s is P(state=s).
         
         Args:
             cell_mask: Optional (H, W) mask indicating which cells to include.
@@ -356,33 +415,55 @@ class Belief:
         Returns:
             Total entropy (sum over cells)
         """
+        total_entropy = 0.0
+        
         if cell_mask is None:
             # Compute entropy over all valid locations
-            probs = np.array([self.probabilities[key] for key in self.valid_locations])
+            locations = list(self.valid_locations)
         else:
             # Compute entropy over masked region
             if lat_grid is None or lon_grid is None:
                 raise ValueError("lat_grid and lon_grid must be provided when cell_mask is specified")
             cell_mask = np.asarray(cell_mask, dtype=bool)
-            probs = []
+            locations = []
             for y in range(self.height):
                 for x in range(self.width):
                     if cell_mask[y, x]:
                         lat, lon = lat_grid[y, x], lon_grid[y, x]
-                        probs.append(self.get_probability(lat, lon))
-            probs = np.array(probs)
+                        locations.append((lat, lon))
         
-        if len(probs) == 0:
+        if len(locations) == 0:
             return 0.0
         
-        # Clip probabilities to avoid log(0)
-        probs = np.clip(probs, 1e-10, 1.0 - 1e-10)
-        entropy = -probs * np.log2(probs) - (1.0 - probs) * np.log2(1.0 - probs)
-        return float(np.sum(entropy))
+        # Compute entropy for each location
+        for lat, lon in locations:
+            if self.num_states == 2:
+                # Binary entropy: H(p) = -p*log2(p) - (1-p)*log2(1-p)
+                p = self.get_probability(lat, lon)
+                eps = 1e-12
+                p = min(max(p, eps), 1.0 - eps)  # Clamp to [eps, 1-eps]
+                if p == 0.0 or p == 1.0:
+                    entropy_val = 0.0
+                else:
+                    entropy_val = -(p * np.log2(p) + (1.0 - p) * np.log2(1.0 - p))
+            else:
+                # Multi-state entropy: H(b) = -Σ_s p_s*log2(p_s)
+                entropy_val = 0.0
+                for s in range(self.num_states):
+                    p_s = self.get_probability(lat, lon, state=s)
+                    eps = 1e-12
+                    p_s = min(max(p_s, eps), 1.0 - eps)  # Clamp to [eps, 1-eps]
+                    if p_s > eps and p_s < 1.0 - eps:
+                        entropy_val -= p_s * np.log2(p_s)
+            
+            total_entropy += entropy_val
+        
+        return float(total_entropy)
 
     def reset(self) -> None:
         """Reset belief to empty state."""
         self.probabilities.clear()
+        self.state_probs.clear()
         self.valid_locations.clear()
 
     def evolve_with_transition_kernel(
@@ -419,12 +500,17 @@ class Belief:
         observation_mask = np.asarray(observation_mask, dtype=bool)
         assert observation_mask.shape == (self.height, self.width), "observation_mask must be (H,W)"
         
-        # Determine environment mode for Numba function
-        mode_map = {"dbn2": 0, "rsp": 1, "viirs_table": 2}
+        # Determine environment mode and num_states
+        mode_map = {"dbn2": 0, "rsp": 1, "viirs_table": 2, "kernel": 3}
         mode = mode_map.get(env.mode, 1)  # Default to RSP if unknown
+        
+        # Update num_states based on environment mode
+        if env.mode == "kernel":
+            self.num_states = 3
         
         # Create a copy to update - maintain ALL locations in belief
         new_probs = {}
+        new_state_probs = {}
         
         # Create a mapping from (lat, lon) to (y, x) for efficient lookup
         latlon_to_grid = {}
@@ -439,7 +525,12 @@ class Belief:
             grid_coords = latlon_to_grid.get((lat, lon))
             if grid_coords is None:
                 # Location not in grid - keep current probability
-                new_probs[(lat, lon)] = self.probabilities.get((lat, lon), self.prior_probability)
+                if self.num_states > 2:
+                    for s in range(self.num_states):
+                        new_state_probs[(lat, lon, s)] = self.state_probs.get((lat, lon, s), 1.0 / self.num_states)
+                    # Do NOT update new_probs in multi-state mode
+                else:
+                    new_probs[(lat, lon)] = self.probabilities.get((lat, lon), self.prior_probability)
                 continue
             
             y, x = grid_coords
@@ -447,7 +538,12 @@ class Belief:
             # Skip observed cells (they are updated separately via update_from_observation)
             if observation_mask[y, x]:
                 # Keep observed cells at their current value (will be updated separately)
-                new_probs[(lat, lon)] = self.probabilities.get((lat, lon), self.prior_probability)
+                if self.num_states > 2:
+                    for s in range(self.num_states):
+                        new_state_probs[(lat, lon, s)] = self.state_probs.get((lat, lon, s), 1.0 / self.num_states)
+                    # Do NOT update new_probs in multi-state mode
+                else:
+                    new_probs[(lat, lon)] = self.probabilities.get((lat, lon), self.prior_probability)
                 continue
             
             # Get neighbors for this cell
@@ -456,14 +552,23 @@ class Belief:
             
             if num_neighbors == 0:
                 # No neighbors - keep current belief (or use uniform prior)
-                new_probs[(lat, lon)] = self.probabilities.get((lat, lon), self.prior_probability)
+                if self.num_states > 2:
+                    for s in range(self.num_states):
+                        new_state_probs[(lat, lon, s)] = self.state_probs.get((lat, lon, s), 1.0 / self.num_states)
+                    # Do NOT update new_probs in multi-state mode
+                else:
+                    new_probs[(lat, lon)] = self.probabilities.get((lat, lon), self.prior_probability)
                 continue
             
-            # Prepare current cell belief [num_states] - binary states
+            # Prepare current cell belief [num_states]
             current_belief = np.zeros(self.num_states, dtype=np.float64)
-            p_current = self.get_probability(lat, lon)
-            current_belief[0] = 1.0 - p_current  # P(E=0)
-            current_belief[1] = p_current  # P(E=1)
+            if self.num_states > 2:
+                for s in range(self.num_states):
+                    current_belief[s] = self.state_probs.get((lat, lon, s), 1.0 / self.num_states)
+            else:
+                p_current = self.get_probability(lat, lon)
+                current_belief[0] = 1.0 - p_current  # P(E=0)
+                current_belief[1] = p_current  # P(E=1)
             
             # Prepare neighbor beliefs [num_neighbors, num_states]
             neighbor_beliefs = np.zeros((num_neighbors, self.num_states), dtype=np.float64)
@@ -471,52 +576,143 @@ class Belief:
                 if 0 <= ny < self.height and 0 <= nx < self.width:
                     n_lat, n_lon = lat_grid[ny, nx], lon_grid[ny, nx]
                     if self.has_location(n_lat, n_lon):
-                        p_neighbor = self.get_probability(n_lat, n_lon)
+                        if self.num_states > 2:
+                            for s in range(self.num_states):
+                                neighbor_beliefs[i, s] = self.state_probs.get((n_lat, n_lon, s), 1.0 / self.num_states)
+                        else:
+                            p_neighbor = self.get_probability(n_lat, n_lon)
+                            neighbor_beliefs[i, 0] = 1.0 - p_neighbor  # P(E=0)
+                            neighbor_beliefs[i, 1] = p_neighbor  # P(E=1)
                     else:
-                        # Neighbor not in belief - use prior
-                        p_neighbor = self.prior_probability
-                    neighbor_beliefs[i, 0] = 1.0 - p_neighbor  # P(E=0)
-                    neighbor_beliefs[i, 1] = p_neighbor  # P(E=1)
+                        # Neighbor not in belief - use uniform prior
+                        if self.num_states > 2:
+                            for s in range(self.num_states):
+                                neighbor_beliefs[i, s] = 1.0 / self.num_states
+                        else:
+                            neighbor_beliefs[i, 0] = 1.0 - self.prior_probability
+                            neighbor_beliefs[i, 1] = self.prior_probability
                 else:
-                    # Out of bounds neighbor - assume no event
+                    # Out of bounds neighbor - assume unburned (state 0)
                     neighbor_beliefs[i, 0] = 1.0
-                    neighbor_beliefs[i, 1] = 0.0
+                    for s in range(1, self.num_states):
+                        neighbor_beliefs[i, s] = 0.0
             
-            # Get environment parameters for this cell
+            # Handle kernel mode separately (needs kernel_learner)
+            if env.mode == "kernel":
+                # Kernel mode: use kernel_learner for transition probabilities
+                # Note: Kernel mode is specifically 3 states, so we use range(3) here
+                if not hasattr(env, 'kernel_learner') or env.kernel_learner is None:
+                    # Fallback: keep current belief
+                    for s in range(self.num_states):
+                        new_state_probs[(lat, lon, s)] = current_belief[s]
+                    # Do NOT update new_probs in multi-state mode
+                    continue
+                
+                # Count burning neighbors (state 1) for kernel
+                num_burning_neighbors = 0
+                for i in range(num_neighbors):
+                    num_burning_neighbors += neighbor_beliefs[i, 1]
+                num_burning_neighbors = int(np.round(num_burning_neighbors))
+                
+                # Get material for this cell
+                cell_key = (y, x)
+                if not hasattr(env, 'material_map') or cell_key not in env.material_map:
+                    # Fallback: keep current belief
+                    for s in range(self.num_states):
+                        new_state_probs[(lat, lon, s)] = current_belief[s]
+                    # Do NOT update new_probs in multi-state mode
+                    continue
+                
+                material = env.material_map[cell_key]
+                
+                # Compute new belief using kernel transition probabilities
+                new_belief = np.zeros(3, dtype=np.float64)
+                for next_state in range(3):
+                    prob = 0.0
+                    for current_state in range(3):
+                        # Get transition probability from kernel
+                        transition_prob = env.kernel_learner.get_transition_probability(
+                            current_state, material, num_burning_neighbors, next_state
+                        )
+                        prob += transition_prob * current_belief[current_state]
+                    new_belief[next_state] = prob
+                
+                # Normalize
+                total = np.sum(new_belief)
+                if total > 1e-10:
+                    new_belief = new_belief / total
+                else:
+                    new_belief[:] = 1.0 / 3.0
+                
+                # Store 3-state probabilities (kernel mode is always 3 states)
+                # States: 0=unburned, 1=burning, 2=burned
+                for s in range(3):
+                    new_state_probs[(lat, lon, s)] = float(new_belief[s])
+                # Do NOT update probabilities dict in multi-state mode
+                continue
+            
+            # Get environment parameters for this cell (for non-kernel modes)
+            # Handle ReplayEnvironment which doesn't have these attributes
+            # Use hasattr to safely check for attributes
             if env.mode == "dbn2":
-                birth_rate = env.birth_rate
-                death_rate = env.death_rate
-                neighbor_influence = env.neighbor_influence
+                birth_rate = getattr(env, 'birth_rate', 0.01)
+                death_rate = getattr(env, 'death_rate', 0.1)
+                neighbor_influence = getattr(env, 'neighbor_influence', 0.05)
                 # RSP params not used for DBN-2
                 lam = beta0 = alpha = delta = 0.0
             elif env.mode == "rsp":
-                # Get per-cell RSP parameters
-                lam_map = env.ignition_map if env.ignition_map is not None else None
-                beta0_map = env.beta0_map if env.beta0_map is not None else None
-                alpha_map = env.alpha_map if env.alpha_map is not None else None
-                persistence_map = env.persistence_map if env.persistence_map is not None else None
+                # Get per-cell RSP parameters (use hasattr for ReplayEnvironment compatibility)
+                lam_map = getattr(env, 'ignition_map', None)
+                beta0_map = getattr(env, 'beta0_map', None)
+                alpha_map = getattr(env, 'alpha_map', None)
+                persistence_map = getattr(env, 'persistence_map', None)
                 
-                lam = float(lam_map[y, x]) if lam_map is not None else env.rsp.lam
-                beta0 = float(beta0_map[y, x]) if beta0_map is not None else env.rsp.beta0
-                alpha = float(alpha_map[y, x]) if alpha_map is not None else env.rsp.alpha
-                delta = float(persistence_map[y, x]) if persistence_map is not None else env.rsp.delta
+                # Get RSP object if available, otherwise use defaults
+                rsp_obj = getattr(env, 'rsp', None)
+                if rsp_obj is None:
+                    # Default RSP parameters if rsp object not available (e.g., ReplayEnvironment)
+                    lam_default = 0.01
+                    beta0_default = 0.1
+                    alpha_default = 1.0
+                    delta_default = 0.9
+                else:
+                    lam_default = rsp_obj.lam
+                    beta0_default = rsp_obj.beta0
+                    alpha_default = rsp_obj.alpha
+                    delta_default = rsp_obj.delta
+                
+                lam = float(lam_map[y, x]) if lam_map is not None else lam_default
+                beta0 = float(beta0_map[y, x]) if beta0_map is not None else beta0_default
+                alpha = float(alpha_map[y, x]) if alpha_map is not None else alpha_default
+                delta = float(persistence_map[y, x]) if persistence_map is not None else delta_default
                 
                 # DBN-2 params not used for RSP
                 birth_rate = death_rate = neighbor_influence = 0.0
             else:  # viirs_table or unknown
-                # Not supported in Numba path - fall back to approximation
-                # Keep current belief unchanged for now (could implement fallback)
-                new_probs[(lat, lon)] = self.probabilities.get((lat, lon), self.prior_probability)
+                # Not supported - keep current belief
+                if self.num_states > 2:
+                    for s in range(self.num_states):
+                        new_state_probs[(lat, lon, s)] = current_belief[s]
+                    # Do NOT update new_probs in multi-state mode
+                else:
+                    new_probs[(lat, lon)] = self.probabilities.get((lat, lon), self.prior_probability)
                 continue
             
             # Check if cell is blocked (can't evolve)
-            if env.blocked_mask is not None and env.blocked_mask[y, x]:
-                # Blocked cells stay at 0 (no event)
-                new_probs[(lat, lon)] = 0.0
+            blocked_mask = getattr(env, 'blocked_mask', None)
+            if blocked_mask is not None and blocked_mask[y, x]:
+                # Blocked cells stay at unburned (state 0)
+                if self.num_states > 2:
+                    new_state_probs[(lat, lon, 0)] = 1.0
+                    for s in range(1, self.num_states):
+                        new_state_probs[(lat, lon, s)] = 0.0
+                    # Do NOT update new_probs in multi-state mode
+                else:
+                    new_probs[(lat, lon)] = 0.0
                 continue
             
-            # Use Numba-optimized belief evolution if available
-            if NUMBA_AVAILABLE:
+            # Use Numba-optimized belief evolution if available (only for binary modes)
+            if NUMBA_AVAILABLE and self.num_states == 2:
                 try:
                     new_belief = _evolve_cell_belief_numba_full(
                         current_belief,
@@ -532,8 +728,9 @@ class Belief:
                         alpha,
                         delta,
                     )
-                    # Extract P(E=1) from new belief
-                    new_probs[(lat, lon)] = float(np.clip(new_belief[1], 0.0, 1.0))
+                    # Extract P(E=1) from new belief (binary mode only)
+                    if self.num_states == 2:
+                        new_probs[(lat, lon)] = float(np.clip(new_belief[1], 0.0, 1.0))
                     continue
                 except Exception as e:
                     # Fall back to Python implementation if Numba fails
@@ -542,17 +739,15 @@ class Belief:
             
             # Fallback Python implementation (slower but correct)
             # This implements the full mean field formula without Numba
-            new_prob_0 = 0.0
-            new_prob_1 = 0.0
-            
+            new_belief = np.zeros(self.num_states, dtype=np.float64)
             num_combinations = self.num_states ** num_neighbors
             
-            # For each next state x' (0 or 1)
-            for next_state in [0, 1]:
+            # For each next state x'
+            for next_state in range(self.num_states):
                 prob = 0.0
                 
                 # Sum over all current states x_j
-                for current_state in [0, 1]:
+                for current_state in range(self.num_states):
                     p_current_state = current_belief[current_state]
                     
                     # Sum over all neighbor configurations
@@ -564,14 +759,18 @@ class Belief:
                             combination.append(temp_idx % self.num_states)
                             temp_idx //= self.num_states
                         
-                        # Count active neighbors (state 1)
-                        active_neighbors = sum(1 for s in combination if s == 1)
-                        
-                        # Compute transition probability using env method
-                        transition_prob = env.transition_probability(y, x, current_state, active_neighbors)
-                        # env.transition_probability returns P(x'=1), so adjust for next_state
-                        if next_state == 0:
-                            transition_prob = 1.0 - transition_prob
+                        # Count active neighbors (state 1) for binary, or use combination for 3-state
+                        if self.num_states == 2:
+                            active_neighbors = sum(1 for s in combination if s == 1)
+                            # Compute transition probability using env method
+                            transition_prob = env.transition_probability(y, x, current_state, active_neighbors)
+                            # env.transition_probability returns P(x'=1), so adjust for next_state
+                            if next_state == 0:
+                                transition_prob = 1.0 - transition_prob
+                        else:
+                            # For 3-state, would need kernel transition probabilities
+                            # This shouldn't happen here (kernel mode handled above)
+                            transition_prob = 1.0 / self.num_states  # Fallback uniform
                         
                         # Compute product of neighbor beliefs for this configuration
                         prob_neighbor_config = 1.0
@@ -581,18 +780,27 @@ class Belief:
                         # Add to sum
                         prob += transition_prob * p_current_state * prob_neighbor_config
                 
-                if next_state == 0:
-                    new_prob_0 = prob
-                else:
-                    new_prob_1 = prob
+                new_belief[next_state] = prob
             
             # Normalize
-            total = new_prob_0 + new_prob_1
+            total = np.sum(new_belief)
             if total > 1e-10:
-                new_probs[(lat, lon)] = float(np.clip(new_prob_1 / total, 0.0, 1.0))
+                new_belief = new_belief / total
             else:
                 # Uniform if total too small
-                new_probs[(lat, lon)] = self.prior_probability
+                new_belief[:] = 1.0 / self.num_states
+            
+            # Store probabilities
+            if self.num_states > 2:
+                for s in range(self.num_states):
+                    new_state_probs[(lat, lon, s)] = float(new_belief[s])
+                # Do NOT update new_probs in multi-state mode
+            else:
+                new_probs[(lat, lon)] = float(new_belief[1])
         
         # Update probabilities - maintain all locations
-        self.probabilities = new_probs
+        # Only update probabilities dict for binary mode
+        if self.num_states == 2:
+            self.probabilities = new_probs
+        if self.num_states > 2:
+            self.state_probs = new_state_probs

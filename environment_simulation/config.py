@@ -24,10 +24,25 @@ class SimulationConfig:
     field_of_regard_deg: float = 20.0  # Field of regard in degrees
     communication_range_deg: float = 5.0  # Communication range for ground stations in degrees
     
+    # Reward weights
+    w_h: float = 1.0  # Weight for information gain (entropy reduction) in reward calculation
+    w_v: float = 1.0  # Weight for event detection value in reward calculation
+    
+    # Event utilities (mapping from state to utility value)
+    # For 2-state mode: {0: 0.0, 1: 1.0}
+    # For 3-state kernel mode: {0: 0.0, 1: 1.0, 2: 0.5}
+    event_utility: dict[int, float] = None  # Will be set in __post_init__ if None
+    
     # Monte Carlo planning parameters
     num_rollouts: int = 30  # Number of Monte Carlo rollouts per action
     planning_horizon: int = 5  # Planning horizon for Monte Carlo rollouts
-    discount_factor: float = 0.95  # Discount factor for future rewards
+    discount_factor: float = 0.95  # Discount factor for future rewards (gamma)
+    epsilon: float = 0.0  # Epsilon-greedy exploration probability for Monte Carlo agents
+    
+    # d-SB-ABBA specific parameters
+    n_seed: int = 20  # Number of belief point seeds for d-SB-ABBA
+    n_roll: int = 5  # Number of rollouts per belief point for d-SB-ABBA
+    n_sweep: int = 3  # Number of PBVI sweeps for d-SB-ABBA
     
     # Ground station parameters
     num_ground_stations: int = 4
@@ -37,19 +52,37 @@ class SimulationConfig:
     num_steps: int = 100  # Number of simulation steps
     num_agents: int = 5  # Number of agents
     
+    # Environment parameters
+    mode: str = "rsp"  # Environment mode: "rsp", "dbn2", "kernel", etc.
+    seed: int = None  # Random seed for environment (None = random)
+    kernel_path: str = None  # Path to learned kernel file (for kernel mode)
+    
     # Performance parameters
     use_parallel_planning: bool = True  # Enable parallel agent planning (one thread per agent)
     
     def __post_init__(self):
-        """Validate configuration parameters."""
+        """Validate configuration parameters and set defaults."""
+        # Set default event_utility if not provided
+        if self.event_utility is None:
+            # Default to 2-state mode
+            self.event_utility = {0: 0.0, 1: 1.0}
+        
+        # Validate parameters
         assert self.grid_height > 0, "grid_height must be positive"
         assert self.grid_width > 0, "grid_width must be positive"
         assert self.orbit_period > 0, "orbit_period must be positive"
         assert self.field_of_regard_deg > 0, "field_of_regard_deg must be positive"
         assert self.communication_range_deg > 0, "communication_range_deg must be positive"
+        assert self.w_h >= 0, "w_h must be non-negative"
+        assert self.w_v >= 0, "w_v must be non-negative"
+        assert isinstance(self.event_utility, dict), "event_utility must be a dictionary"
         assert self.num_rollouts > 0, "num_rollouts must be positive"
         assert self.planning_horizon > 0, "planning_horizon must be positive"
         assert 0 < self.discount_factor <= 1, "discount_factor must be in (0, 1]"
+        assert 0 <= self.epsilon <= 1, "epsilon must be in [0, 1]"
+        assert self.n_seed > 0, "n_seed must be positive"
+        assert self.n_roll > 0, "n_roll must be positive"
+        assert self.n_sweep > 0, "n_sweep must be positive"
         assert self.num_ground_stations > 0, "num_ground_stations must be positive"
         assert self.min_satellites_per_station > 0, "min_satellites_per_station must be positive"
         assert self.num_steps > 0, "num_steps must be positive"
@@ -58,6 +91,20 @@ class SimulationConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SimulationConfig":
         """Create SimulationConfig from dictionary."""
+        # Handle event_utility conversion from JSON (may be dict or list of lists)
+        if "event_utility" in data:
+            event_util = data["event_utility"]
+            if isinstance(event_util, list):
+                # Convert from list of [state, utility] pairs to dict
+                data["event_utility"] = {int(k): float(v) for k, v in event_util}
+            elif isinstance(event_util, dict):
+                # Ensure keys are ints and values are floats
+                data["event_utility"] = {int(k): float(v) for k, v in event_util.items()}
+        
+        # Convert kernel_path None string to actual None
+        if "kernel_path" in data and data["kernel_path"] == "None":
+            data["kernel_path"] = None
+        
         return cls(**data)
     
     @classmethod

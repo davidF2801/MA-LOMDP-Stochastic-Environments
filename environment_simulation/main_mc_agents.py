@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -25,6 +26,8 @@ try:
         from .agents.monte_carlo_agent import MonteCarloAgent
         from .agents.random_agent import RandomAgent
         from .agents.sharing_monte_carlo_agent import SharingMonteCarloAgent
+        from .agents.dsb_abba_agent import DSBABBAAgent
+        from .agents.satellite_attention_agent import SatelliteCentralizedAgent
         from .agents.ground_station import GroundStation
         from .agents.belief import Belief
         from .agents.trajectory import Trajectory
@@ -43,6 +46,8 @@ except ImportError:
     from environment_simulation.agents.monte_carlo_agent import MonteCarloAgent
     from environment_simulation.agents.random_agent import RandomAgent
     from environment_simulation.agents.sharing_monte_carlo_agent import SharingMonteCarloAgent
+    from environment_simulation.agents.dsb_abba_agent import DSBABBAAgent
+    from environment_simulation.agents.satellite_attention_agent import SatelliteCentralizedAgent
     from environment_simulation.agents.ground_station import GroundStation
     from environment_simulation.agents.belief import Belief
     from environment_simulation.agents.trajectory import Trajectory
@@ -60,13 +65,112 @@ def create_lat_lon_grids(height: int, width: int) -> tuple[np.ndarray, np.ndarra
     return lat_grid, lon_grid
 
 
-def create_environment(height: int, width: int) -> Environment:
-    """Create and configure the environment."""
+def _create_material_map_2d(
+    height: int,
+    width: int,
+    blocked_mask: Optional[np.ndarray] = None,
+    rng: Optional[np.random.Generator] = None,
+) -> dict[tuple[int, int], "Material"]:
+    """
+    Create material assignments for 2D grid cells.
+    
+    Only uses WATER, GRASS, and WOOD (no GASOLINE).
+    Blocked cells get WATER.
+    
+    Args:
+        height: Grid height
+        width: Grid width
+        blocked_mask: Optional boolean (H,W) array indicating blocked cells
+        rng: Random number generator
+    
+    Returns:
+        Dictionary mapping (y, x) -> Material
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    
+    # Import Material here to avoid circular imports and only when actually needed
+    import sys
+    import os
+    
+    # Mock window_option before importing Material to avoid favicon error
+    FIRE_SIM_PATH = os.path.join(os.path.dirname(__file__), '..', 'fire-simulation')
+    if FIRE_SIM_PATH not in sys.path:
+        sys.path.insert(0, FIRE_SIM_PATH)
+    
+    # Mock src.window_option to avoid FileNotFoundError for favicon
+    import types
+    if 'src.window_option' not in sys.modules:
+        window_option_mock = types.ModuleType('src.window_option')
+        window_option_mock.CELL_WIDTH = 10
+        window_option_mock.CELL_HEIGHT = 10
+        sys.modules['src.window_option'] = window_option_mock
+    
+    from src.material import Material
+    
+    material_map = {}
+    
+    for y in range(height):
+        for x in range(width):
+            cell_key = (y, x)
+            # Use blocked_mask to assign WATER (can't burn) to blocked cells
+            if blocked_mask is not None and blocked_mask[y, x]:
+                material_map[cell_key] = Material.WATER
+            else:
+                # Random material assignment: only WATER, GRASS, and WOOD
+                rand = rng.random()
+                if rand < 0.40:
+                    material_map[cell_key] = Material.GRASS
+                elif rand < 0.80:
+                    material_map[cell_key] = Material.WOOD
+                else:
+                    material_map[cell_key] = Material.WATER
+    
+    return material_map
+
+
+def create_environment(
+    height: int,
+    width: int,
+    kernel_path: Optional[str] = None,
+) -> Environment:
+    """Create and configure the environment.
+    
+    Args:
+        height: Grid height
+        width: Grid width
+        kernel_path: Optional path to learned kernel file. If provided, uses kernel mode.
+    
+    Returns:
+        Environment instance
+    """
     base_rng = np.random.default_rng(1)
     
     lat_grid, lon_grid = create_lat_lon_grids(height, width)
     
-    # Create clustered ignition map
+    # Create blocked mask (same for both RSP and kernel modes)
+    blocked_mask = np.zeros((height, width), dtype=bool)
+    blocked_mask[:, : width // 18] = True  # permanent ocean strip
+    blocked_mask |= base_rng.random((height, width)) < 0.05
+    
+    # Load kernel if kernel_path provided
+    kernel_learner = None
+    material_map = None
+    mode = "rsp"
+    
+    if kernel_path is not None:
+        # Lazy import to avoid fire-simulation dependencies when not using kernel
+        from environment_simulation.kernel_learning import TransitionKernelLearner
+        kernel_learner = TransitionKernelLearner()
+        kernel_learner.load_kernel(kernel_path)
+        print(f"Loaded kernel from: {kernel_path}")
+        mode = "kernel"
+        
+        # Create material map for kernel mode
+        material_map = _create_material_map_2d(height, width, blocked_mask, base_rng)
+        print(f"Created material map for {height}x{width} grid")
+    
+    # Create clustered ignition map (for RSP mode)
     lam_map = 1.5e-4 * np.ones((height, width))
     for center_lat, center_lon, amp, spread in [
         (-0.3, 1.2, 9e-4, 0.18),
@@ -86,23 +190,27 @@ def create_environment(height: int, width: int) -> Environment:
     persistence_map += 0.003 * base_rng.random((height, width))
     persistence_map = np.clip(persistence_map, 0.0, 0.999)
     
-    blocked_mask = np.zeros((height, width), dtype=bool)
-    blocked_mask[:, : width // 18] = True  # permanent ocean strip
-    blocked_mask |= base_rng.random((height, width)) < 0.05
+    # Create environment with appropriate mode
+    env_kwargs = {
+        "width": width,
+        "height": height,
+        "mode": mode,
+        "topology": "sphere",
+        "blocked_mask": blocked_mask,
+        "seed": 7,
+    }
     
-    env = Environment(
-        width=width,
-        height=height,
-        mode="rsp",
-        topology="sphere",
-        rsp_params=RSPParams(lam=0.02, beta0=0.001, alpha=0.03, delta=0.92),
-        ignition_map=lam_map,
-        alpha_map=alpha_map,
-        beta0_map=beta0_map,
-        persistence_map=persistence_map,
-        blocked_mask=blocked_mask,
-        seed=7,
-    )
+    if mode == "kernel":
+        env_kwargs["kernel_learner"] = kernel_learner
+        env_kwargs["material_map"] = material_map
+    else:
+        env_kwargs["rsp_params"] = RSPParams(lam=0.02, beta0=0.001, alpha=0.03, delta=0.92)
+        env_kwargs["ignition_map"] = lam_map
+        env_kwargs["alpha_map"] = alpha_map
+        env_kwargs["beta0_map"] = beta0_map
+        env_kwargs["persistence_map"] = persistence_map
+    
+    env = Environment(**env_kwargs)
     
     env.reset(initial_events=8)
     return env
@@ -110,7 +218,7 @@ def create_environment(height: int, width: int) -> Environment:
 
 def create_greedy_agents(
     height: int, width: int, num_agents: int = 5, sim_config: SimulationConfig = DEFAULT_CONFIG,
-    agent_configs_json: str | None = None
+    agent_configs_json: str | None = None, kernel_path: Optional[str] = None
 ) -> list[GreedyAgent]:
     """Create multiple greedy agents with different trajectories.
     
@@ -182,7 +290,10 @@ def create_greedy_agents(
         )
         
         # Create belief with all FOR locations pre-initialized
-        belief = Belief(height=height, width=width, prior_probability=0.5)
+        # Set num_states=3 for kernel mode, 2 for binary mode
+        kernel_path_used = kernel_path or sim_config.kernel_path
+        num_states = 3 if kernel_path_used else 2
+        belief = Belief(height=height, width=width, prior_probability=0.5, num_states=num_states)
         
         # Create temporary agent to compute FOR locations
         temp_agent = GreedyAgent(
@@ -200,15 +311,21 @@ def create_greedy_agents(
         for lat, lon in all_for_locations:
             belief.set_probability(lat, lon, belief.prior_probability)
         
+        # Determine event_utility based on mode
+        event_utility_final = sim_config.event_utility.copy()
+        if kernel_path_used and 2 not in event_utility_final:
+            # Add state 2 utility for kernel mode if not present
+            event_utility_final[2] = 0.5
+        
         agent = GreedyAgent(
             name=config["name"],
             trajectory=trajectory,
             belief=belief,
             field_of_regard_deg=config["field_of_regard_deg"],
             color=config["color"],
-            w_h=1.0,
-            w_v=1.0,
-            event_utility={0: 0.0, 1: 1.0},
+            w_h=sim_config.w_h,
+            w_v=sim_config.w_v,
+            event_utility=event_utility_final,
             max_observation_ratio=0.2,
         )
         
@@ -219,7 +336,7 @@ def create_greedy_agents(
 
 def create_random_agents(
     height: int, width: int, num_agents: int = 5, sim_config: SimulationConfig = DEFAULT_CONFIG,
-    agent_configs_json: str | None = None
+    agent_configs_json: str | None = None, kernel_path: Optional[str] = None
 ) -> list[RandomAgent]:
     """Create multiple random agents with different trajectories.
     
@@ -291,7 +408,9 @@ def create_random_agents(
         )
         
         # Create belief with all FOR locations pre-initialized
-        belief = Belief(height=height, width=width, prior_probability=0.5)
+        # Set num_states=3 for kernel mode, 2 for binary mode
+        num_states = 3 if kernel_path else 2
+        belief = Belief(height=height, width=width, prior_probability=0.5, num_states=num_states)
         
         # Create temporary agent to compute FOR locations
         temp_agent = RandomAgent(
@@ -326,7 +445,7 @@ def create_random_agents(
 
 def create_monte_carlo_agents(
     height: int, width: int, num_agents: int = 5, sim_config: SimulationConfig = DEFAULT_CONFIG,
-    agent_configs_json: str | None = None
+    agent_configs_json: str | None = None, kernel_path: Optional[str] = None
 ) -> list[MonteCarloAgent]:
     """Create multiple Monte Carlo agents with different trajectories.
     
@@ -399,7 +518,10 @@ def create_monte_carlo_agents(
         )
         
         # Create belief with all FOR locations pre-initialized
-        belief = Belief(height=height, width=width, prior_probability=0.5)
+        # Set num_states=3 for kernel mode, 2 for binary mode
+        kernel_path_used = kernel_path or sim_config.kernel_path
+        num_states = 3 if kernel_path_used else 2
+        belief = Belief(height=height, width=width, prior_probability=0.5, num_states=num_states)
         
         # Create temporary agent to compute FOR locations
         temp_agent = MonteCarloAgent(
@@ -418,6 +540,11 @@ def create_monte_carlo_agents(
         for lat, lon in all_for_locations:
             belief.set_probability(lat, lon, belief.prior_probability)
         
+        # Determine event_utility based on mode
+        event_utility_final = sim_config.event_utility.copy()
+        if kernel_path_used and 2 not in event_utility_final:
+            event_utility_final[2] = 0.5
+        
         agent = MonteCarloAgent(
             name=config["name"],
             trajectory=trajectory,
@@ -425,9 +552,9 @@ def create_monte_carlo_agents(
             field_of_regard_deg=config["field_of_regard_deg"],
             color=config["color"],
             num_rollouts=config["num_rollouts"],
-            w_h=1.0,
-            w_v=1.0,
-            event_utility={0: 0.0, 1: 1.0},
+            w_h=sim_config.w_h,
+            w_v=sim_config.w_v,
+            event_utility=event_utility_final,
             discount_factor=sim_config.discount_factor,
         )
         
@@ -438,7 +565,7 @@ def create_monte_carlo_agents(
 
 def create_sharing_monte_carlo_agents(
     height: int, width: int, num_agents: int = 5, sim_config: SimulationConfig = DEFAULT_CONFIG,
-    agent_configs_json: str | None = None
+    agent_configs_json: str | None = None, kernel_path: Optional[str] = None
 ) -> list[SharingMonteCarloAgent]:
     """Create multiple Sharing Monte Carlo agents with different trajectories.
     
@@ -511,7 +638,10 @@ def create_sharing_monte_carlo_agents(
         )
         
         # Create belief with all FOR locations pre-initialized
-        belief = Belief(height=height, width=width, prior_probability=0.5)
+        # Set num_states=3 for kernel mode, 2 for binary mode
+        kernel_path_used = kernel_path or sim_config.kernel_path
+        num_states = 3 if kernel_path_used else 2
+        belief = Belief(height=height, width=width, prior_probability=0.5, num_states=num_states)
         
         # Create temporary agent to compute FOR locations
         temp_agent = SharingMonteCarloAgent(
@@ -530,6 +660,11 @@ def create_sharing_monte_carlo_agents(
         for lat, lon in all_for_locations:
             belief.set_probability(lat, lon, belief.prior_probability)
         
+        # Determine event_utility based on mode
+        event_utility_final = sim_config.event_utility.copy()
+        if kernel_path_used and 2 not in event_utility_final:
+            event_utility_final[2] = 0.5
+        
         agent = SharingMonteCarloAgent(
             name=config["name"],
             trajectory=trajectory,
@@ -537,11 +672,135 @@ def create_sharing_monte_carlo_agents(
             field_of_regard_deg=config["field_of_regard_deg"],
             color=config["color"],
             num_rollouts=config["num_rollouts"],
-            w_h=1.0,
-            w_v=1.0,
-            event_utility={0: 0.0, 1: 1.0},
+            w_h=sim_config.w_h,
+            w_v=sim_config.w_v,
+            event_utility=event_utility_final,
             discount_factor=sim_config.discount_factor,
             communication_range_deg=sim_config.communication_range_deg,
+        )
+        
+        agents.append(agent)
+    
+    return agents
+
+
+def create_dsb_abba_agents(
+    height: int, width: int, num_agents: int = 5, sim_config: SimulationConfig = DEFAULT_CONFIG,
+    agent_configs_json: str | None = None, event_utility: Optional[dict[int, float]] = None,
+    kernel_path: Optional[str] = None
+) -> list[DSBABBAAgent]:
+    """Create multiple DSB-ABBA agents with different trajectories.
+    
+    Args:
+        height: Grid height
+        width: Grid width
+        num_agents: Number of agents to create
+        sim_config: Simulation configuration
+        agent_configs_json: Path to JSON file with agent configurations. If None, uses default.json
+    """
+    agents = []
+    
+    # Load agent configurations from JSON
+    try:
+        agent_configs = load_agent_configurations(agent_configs_json)
+    except (FileNotFoundError, ValueError):
+        # Fallback to hardcoded configs if JSON loading fails
+        agent_configs = [
+            {
+                "name": "Aurora-1",
+                "inclination_deg": 25.0,
+                "phase_deg": 0.0,
+                "latitude_offset": 0.0,
+                "color": "#ffd166",
+            },
+            {
+                "name": "Borealis-2",
+                "inclination_deg": 55.0,
+                "phase_deg": 72.0,
+                "latitude_offset": 5.0,
+                "color": "#4ecdc4",
+            },
+            {
+                "name": "Zenith-3",
+                "inclination_deg": 10.0,
+                "phase_deg": 144.0,
+                "latitude_offset": -8.0,
+                "color": "#ff6b6b",
+            },
+            {
+                "name": "Polaris-4",
+                "inclination_deg": 40.0,
+                "phase_deg": 216.0,
+                "latitude_offset": 3.0,
+                "color": "#95e1d3",
+            },
+            {
+                "name": "Vega-5",
+                "inclination_deg": 30.0,
+                "phase_deg": 288.0,
+                "latitude_offset": -5.0,
+                "color": "#f38181",
+            },
+        ]
+    
+    # Add simulation config values to each agent config
+    for config in agent_configs:
+        config["field_of_regard_deg"] = sim_config.field_of_regard_deg
+    
+    # Create lat/lon grids for pre-computing FOR locations
+    lat_grid, lon_grid = create_lat_lon_grids(height, width)
+    
+    for i, config in enumerate(agent_configs[:num_agents]):
+        trajectory = Trajectory.circular_orbit(
+            period=sim_config.orbit_period,
+            inclination_deg=config["inclination_deg"],
+            phase_deg=config["phase_deg"],
+            latitude_offset=config["latitude_offset"],
+        )
+        
+        # Create belief with all FOR locations pre-initialized
+        # Set num_states=3 for kernel mode, 2 for binary mode
+        kernel_path_used = kernel_path or sim_config.kernel_path
+        num_states = 3 if kernel_path_used else 2
+        belief = Belief(height=height, width=width, prior_probability=0.5, num_states=num_states)
+        
+        # Create temporary agent to compute FOR locations
+        temp_agent = DSBABBAAgent(
+            name=config["name"],
+            trajectory=trajectory,
+            belief=belief,
+            field_of_regard_deg=config["field_of_regard_deg"],
+            color=config["color"],
+        )
+        
+        # Pre-compute all locations that will be in FOR over trajectory period
+        all_for_locations = temp_agent.compute_all_for_locations(lat_grid, lon_grid)
+        
+        # Initialize belief with all FOR locations at prior probability
+        for lat, lon in all_for_locations:
+            belief.set_probability(lat, lon, belief.prior_probability)
+        
+        # Use config event_utility (already has state 2 if kernel mode)
+        event_utility_final = event_utility if event_utility is not None else sim_config.event_utility.copy()
+        if kernel_path_used and 2 not in event_utility_final:
+            event_utility_final[2] = 0.5
+        
+        agent = DSBABBAAgent(
+            name=config["name"],
+            trajectory=trajectory,
+            belief=belief,
+            field_of_regard_deg=config["field_of_regard_deg"],
+            color=config["color"],
+            w_h=sim_config.w_h,
+            w_v=sim_config.w_v,
+            event_utility=event_utility_final,
+            discount_factor=sim_config.discount_factor,
+            communication_range_deg=sim_config.communication_range_deg,
+            n_seed=sim_config.n_seed,
+            n_roll=sim_config.n_roll,
+            n_sweep=sim_config.n_sweep,
+            horizon=sim_config.planning_horizon,
+            gamma=sim_config.discount_factor,
         )
         
         agents.append(agent)
@@ -578,6 +837,10 @@ class MonteCarloSimulation:
                 "fires_observed": 0,  # Per-agent fire observations
                 "total_reward": 0.0,
                 "observations_count": 0,
+                "detection_value": 0.0,  # Accumulated detection value from observed states
+                # Planning time statistics (seconds)
+                "planning_time": 0.0,    # Total time spent in planning/act() calls
+                "planning_calls": 0,     # Number of planning/act() calls
             }
             for agent in agents
         }
@@ -595,6 +858,7 @@ class MonteCarloSimulation:
             "fires_observed": 0,  # Total fire observations (including reobservations)
             "unique_fires_observed": 0,  # Number of unique fires observed by constellation
             "reobservations": 0,  # Number of times a fire was reobserved (by any agent)
+            "total_detection_value": 0.0,  # Accumulated detection value across all agents
         }
         
         # Track previous state to detect fire start/end events
@@ -638,6 +902,12 @@ class MonteCarloSimulation:
             }
             if isinstance(agent, SharingMonteCarloAgent):
                 act_kwargs["ground_stations"] = self.ground_stations
+            if isinstance(agent, DSBABBAAgent):
+                act_kwargs["all_agents"] = self.agents
+                act_kwargs["ground_stations"] = self.ground_stations
+            if isinstance(agent, SatelliteCentralizedAgent):
+                act_kwargs["all_agents"] = self.agents
+                act_kwargs["ground_stations"] = self.ground_stations
             agent_tasks.append((agent, act_kwargs))
         
         # Execute agent planning in parallel
@@ -675,7 +945,18 @@ class MonteCarloSimulation:
     
     def _agent_plan(self, agent: Agent, act_kwargs: dict) -> dict:
         """Execute agent planning (runs in parallel thread)."""
-        return agent.act(**act_kwargs)
+        start_time = time.perf_counter()
+        action_info = agent.act(**act_kwargs)
+        elapsed = time.perf_counter() - start_time
+        
+        # Update per-agent planning time statistics (thread-safe)
+        with self.print_lock:
+            stats = self.agent_stats.get(agent.name)
+            if stats is not None:
+                stats["planning_time"] += elapsed
+                stats["planning_calls"] += 1
+        
+        return action_info
     
     def _step_sequential(self, step: int):
         """Execute one simulation step with sequential agent planning (original behavior)."""
@@ -696,7 +977,22 @@ class MonteCarloSimulation:
             if isinstance(agent, SharingMonteCarloAgent):
                 act_kwargs["ground_stations"] = self.ground_stations
             
+            # Add all_agents for DSB-ABBA and CTDE agents
+            if isinstance(agent, DSBABBAAgent) or isinstance(agent, SatelliteCentralizedAgent):
+                act_kwargs["all_agents"] = self.agents
+                act_kwargs["ground_stations"] = self.ground_stations
+            
+            # Time the planning/act call
+            start_time = time.perf_counter()
             action_info = agent.act(**act_kwargs)
+            elapsed = time.perf_counter() - start_time
+            
+            # Update per-agent planning time statistics
+            stats = self.agent_stats.get(agent.name)
+            if stats is not None:
+                stats["planning_time"] += elapsed
+                stats["planning_calls"] += 1
+            
             self._process_agent_action(agent, step, action_info)
     
     def _process_agent_action(self, agent: Agent, step: int, action_info: dict):
@@ -758,6 +1054,44 @@ class MonteCarloSimulation:
         self.agent_stats[agent.name]["fires_observed"] += observed_fires
         self.agent_stats[agent.name]["observations_count"] += len(observation_points)
         
+        # Compute detection value from actual observed states
+        # Get event_utility from agent (supports both 2-state and 3-state)
+        event_utility = getattr(agent, 'event_utility', None)
+        
+        # If event_utility is not set or empty, determine default based on environment mode
+        if not event_utility:
+            # Check if we're in kernel mode (3 states) by checking environment mode or agent's belief
+            is_kernel_mode = (
+                hasattr(self.env, 'mode') and self.env.mode == "kernel"
+            ) or (
+                hasattr(agent, 'belief') and hasattr(agent.belief, 'num_states') and agent.belief.num_states == 3
+            )
+            if is_kernel_mode:
+                event_utility = {0: 0.0, 1: 1.0, 2: 0.5}  # 3-state kernel mode
+            else:
+                event_utility = {0: 0.0, 1: 1.0}  # 2-state RSP/DBN-2 mode
+        else:
+            # Ensure event_utility has state 2 if we're in kernel mode (even if agent's utility doesn't have it)
+            is_kernel_mode = (
+                hasattr(self.env, 'mode') and self.env.mode == "kernel"
+            ) or (
+                hasattr(agent, 'belief') and hasattr(agent.belief, 'num_states') and agent.belief.num_states == 3
+            )
+            if is_kernel_mode and 2 not in event_utility:
+                # Add state 2 utility if missing (default to 0.5 for burned state)
+                event_utility = event_utility.copy()  # Don't modify agent's original dict
+                event_utility[2] = 0.5
+        
+        # Sum detection value for all observed cells (including burned state 2)
+        detection_value = 0.0
+        for observed_state in observed_values:
+            state = int(observed_state)
+            utility = event_utility.get(state, 0.0)
+            detection_value += utility
+        
+        self.agent_stats[agent.name]["detection_value"] += detection_value
+        self.constellation_stats["total_detection_value"] += detection_value
+        
         # Track constellation-wide unique fires and reobservations
         # Get the (lat, lon) coordinates of observed fire cells
         fire_cells = []
@@ -793,11 +1127,15 @@ class MonteCarloSimulation:
             )
             self.agent_stats[agent.name]["total_reward"] += immediate_reward
         
-        # For SharingMonteCarloAgent: save belief snapshot BEFORE observation update
+        # For SharingMonteCarloAgent and DSBABBAAgent: save belief snapshot BEFORE observation update
         # This allows temporal belief reconstruction from this timestep
         if isinstance(agent, SharingMonteCarloAgent):
             # Save snapshot at the START of this timestep (before observation)
             # This represents the belief state before applying observation at step
+            agent._save_belief_snapshot(step)
+        
+        # For DSBABBAAgent: also save snapshot
+        if isinstance(agent, DSBABBAAgent):
             agent._save_belief_snapshot(step)
         
         # Update agent belief with ground truth observations
@@ -807,9 +1145,9 @@ class MonteCarloSimulation:
             observation_points=observation_points
         )
         
-        # For SharingMonteCarloAgent: record the observation at this timestep
+        # For SharingMonteCarloAgent, DSBABBAAgent, and SatelliteCentralizedAgent: record the observation at this timestep
         # This allows temporal belief reconstruction when data is shared
-        if isinstance(agent, SharingMonteCarloAgent):
+        if isinstance(agent, (SharingMonteCarloAgent, DSBABBAAgent, SatelliteCentralizedAgent)):
             # Convert ground truth observation to dict format: (lat, lon) -> value
             # observation_points is a set of (lat, lon) tuples
             # observation_mask tells us which grid cells correspond to these points
@@ -861,6 +1199,16 @@ class MonteCarloSimulation:
         Returns:
             Dictionary containing simulation statistics
         """
+        # Compute aggregate planning time across all agents
+        total_planning_time = 0.0
+        total_planning_calls = 0
+        for stats in self.agent_stats.values():
+            total_planning_time += stats.get("planning_time", 0.0)
+            total_planning_calls += stats.get("planning_calls", 0)
+        avg_planning_time = (
+            total_planning_time / total_planning_calls if total_planning_calls > 0 else 0.0
+        )
+        
         stats_dict = {
             "simulation": {
                 "total_steps": self.env.time,
@@ -870,11 +1218,14 @@ class MonteCarloSimulation:
                     "width": self.env.width,
                 },
                 "total_fire_events": len(self.fire_events),
+                # Average planning time per plan call across all agents (seconds)
+                "avg_planning_time": float(avg_planning_time),
             },
             "constellation": {
                 "fires_observed": int(self.constellation_stats["fires_observed"]),  # Total (including reobservations)
                 "unique_fires_observed": int(self.constellation_stats["unique_fires_observed"]),  # Unique fires
                 "reobservations": int(self.constellation_stats["reobservations"]),  # Reobservation count
+                "total_detection_value": float(self.constellation_stats["total_detection_value"]),  # Accumulated detection value
             },
             "agents": {},
         }
@@ -882,11 +1233,18 @@ class MonteCarloSimulation:
         for agent_name, stats in self.agent_stats.items():
             avg_reward = (stats["total_reward"] / stats["observations_count"] 
                          if stats["observations_count"] > 0 else 0.0)
+            # Average planning time per call for this agent
+            pt_calls = stats.get("planning_calls", 0)
+            avg_planning_time_agent = (
+                stats.get("planning_time", 0.0) / pt_calls if pt_calls > 0 else 0.0
+            )
             stats_dict["agents"][agent_name] = {
                 "fires_observed": int(stats["fires_observed"]),  # Per-agent total
                 "total_reward": float(stats["total_reward"]),
                 "observations_count": int(stats["observations_count"]),
                 "avg_reward_per_observation": float(avg_reward),
+                "detection_value": float(stats.get("detection_value", 0.0)),  # Per-agent detection value
+                "avg_planning_time": float(avg_planning_time_agent),  # Per-agent average planning time (seconds)
             }
         
         return stats_dict
@@ -902,18 +1260,39 @@ class MonteCarloSimulation:
         print(f"  Fires Observed (Total): {self.constellation_stats['fires_observed']}")
         print(f"  Unique Fires Observed: {self.constellation_stats['unique_fires_observed']}")
         print(f"  Reobservations: {self.constellation_stats['reobservations']}")
+        print(f"  Total Detection Value: {self.constellation_stats['total_detection_value']:.4f}")
+        # Average planning time across all agents (seconds)
+        total_planning_time = sum(
+            stats.get("planning_time", 0.0) for stats in self.agent_stats.values()
+        )
+        total_planning_calls = sum(
+            stats.get("planning_calls", 0) for stats in self.agent_stats.values()
+        )
+        avg_planning_time = (
+            total_planning_time / total_planning_calls if total_planning_calls > 0 else 0.0
+        )
+        print(f"  Avg Planning Time per Call: {avg_planning_time:.6f} s")
         print()
         
         # Per-agent statistics
         print("PER-AGENT METRICS:")
-        print(f"{'Agent':<20} {'Fires Observed':<18} {'Total Reward':<18} {'Avg Reward/Obs':<18}")
-        print("-"*70)
+        print(f"{'Agent':<20} {'Fires Observed':<18} {'Total Reward':<18} "
+              f"{'Detection Value':<18} {'Avg Reward/Obs':<18} {'Avg Plan Time (s)':<18}")
+        print("-"*100)
         
         for agent_name, stats in sorted(self.agent_stats.items()):
             avg_reward = (stats["total_reward"] / stats["observations_count"] 
                          if stats["observations_count"] > 0 else 0.0)
-            print(f"{agent_name:<20} {stats['fires_observed']:<18} "
-                  f"{stats['total_reward']:<18.4f} {avg_reward:<18.4f}")
+            detection_value = stats.get("detection_value", 0.0)
+            pt_calls = stats.get("planning_calls", 0)
+            avg_planning_time_agent = (
+                stats.get("planning_time", 0.0) / pt_calls if pt_calls > 0 else 0.0
+            )
+            print(
+                f"{agent_name:<20} {stats['fires_observed']:<18} "
+                f"{stats['total_reward']:<18.4f} {detection_value:<18.4f} "
+                f"{avg_reward:<18.4f} {avg_planning_time_agent:<18.6f}"
+            )
         
         print("="*70)
         print(f"Total simulation steps: {self.env.time}")
@@ -973,24 +1352,48 @@ class MonteCarloSimulation:
             writer.writerow([
                 'Reobservations', self.constellation_stats['reobservations']
             ])
+            writer.writerow([
+                'Total Detection Value', f"{self.constellation_stats['total_detection_value']:.4f}"
+            ])
+            # Average planning time across all agents (seconds)
+            total_planning_time = sum(
+                stats.get("planning_time", 0.0) for stats in self.agent_stats.values()
+            )
+            total_planning_calls = sum(
+                stats.get("planning_calls", 0) for stats in self.agent_stats.values()
+            )
+            avg_planning_time = (
+                total_planning_time / total_planning_calls if total_planning_calls > 0 else 0.0
+            )
+            writer.writerow([
+                'Avg Planning Time per Call (s)', f"{avg_planning_time:.6f}"
+            ])
             writer.writerow([])  # Empty row separator
             
             # Write per-agent statistics
             writer.writerow(['PER-AGENT METRICS'])
             writer.writerow([
-                'Agent', 'Fires Observed', 'Total Reward', 
-                'Observations Count', 'Avg Reward per Observation'
+                'Agent', 'Fires Observed', 'Total Reward', 'Detection Value',
+                'Observations Count', 'Avg Reward per Observation',
+                'Avg Planning Time (s)'
             ])
             # Write data
             for agent_name, stats in self.agent_stats.items():
                 avg_reward = (stats["total_reward"] / stats["observations_count"] 
                              if stats["observations_count"] > 0 else 0.0)
+                detection_value = stats.get("detection_value", 0.0)
+                pt_calls = stats.get("planning_calls", 0)
+                avg_planning_time_agent = (
+                    stats.get("planning_time", 0.0) / pt_calls if pt_calls > 0 else 0.0
+                )
                 writer.writerow([
                     agent_name,
                     stats["fires_observed"],
                     f"{stats['total_reward']:.4f}",
+                    f"{detection_value:.4f}",
                     stats["observations_count"],
                     f"{avg_reward:.4f}",
+                    f"{avg_planning_time_agent:.6f}",
                 ])
             # Write simulation summary
             writer.writerow([])
@@ -1010,6 +1413,7 @@ def get_method_folder_name(agent_type: str) -> str:
         "monte_carlo": "monte_carlo",
         "random": "random",
         "greedy": "greedy",
+        "dsb_abba": "dsb_abba",
     }
     return method_map.get(agent_type, agent_type.lower())
 
@@ -1065,6 +1469,7 @@ def main(
     env: Optional[Environment] = None,  # Optional pre-created environment (can be ReplayEnvironment)
     original_env: Optional[Environment] = None,  # Original env for transition kernel (for replay envs)
     results_timestamp_path: str | None = None,  # Optional timestamp folder path (if None, creates new one)
+    kernel_path: Optional[str] = None,  # Optional path to learned kernel file (for kernel mode)
 ):
     """
     Main function to run agent simulation.
@@ -1099,9 +1504,12 @@ def main(
     planning_horizon = planning_horizon if planning_horizon is not None else config.planning_horizon
     num_steps = num_steps if num_steps is not None else config.num_steps
     
+    # Use kernel_path from config if not provided as parameter
+    kernel_path_used = kernel_path if kernel_path is not None else config.kernel_path
+    
     # Use provided environment or create a new one
     if env is None:
-        env = create_environment(height, width)
+        env = create_environment(height, width, kernel_path=kernel_path_used)
     
     # Use original_env for transition kernel if provided, otherwise use env
     transition_env = original_env if original_env is not None else env
@@ -1111,9 +1519,9 @@ def main(
     agent_configs_for_summary = None  # Store for trajectory summary
     
     if agent_type == "random":
-        agents = create_random_agents(height, width, num_agents=num_agents, sim_config=config)
+        agents = create_random_agents(height, width, num_agents=num_agents, sim_config=config, kernel_path=kernel_path_used)
     elif agent_type == "greedy":
-        agents = create_greedy_agents(height, width, num_agents=num_agents, sim_config=config)
+        agents = create_greedy_agents(height, width, num_agents=num_agents, sim_config=config, kernel_path=kernel_path_used)
     elif agent_type == "sharing":
         # Load agent configs from JSON
         try:
@@ -1135,7 +1543,7 @@ def main(
         for agent_config in agent_configs:
             agent_config["field_of_regard_deg"] = config.field_of_regard_deg
         
-        agents = create_sharing_monte_carlo_agents(height, width, num_agents=num_agents, sim_config=config)
+        agents = create_sharing_monte_carlo_agents(height, width, num_agents=num_agents, sim_config=config, kernel_path=kernel_path_used)
         ground_stations = create_ground_stations_from_agent_configs(
             agent_configs[:num_agents], 
             orbit_period=config.orbit_period, 
@@ -1165,10 +1573,158 @@ def main(
                 {"name": "Polaris-4", "inclination_deg": 40.0, "phase_deg": 216.0, "latitude_offset": 3.0},
                 {"name": "Vega-5", "inclination_deg": 30.0, "phase_deg": 288.0, "latitude_offset": -5.0},
             ]
-        agents = create_monte_carlo_agents(height, width, num_agents=num_agents, sim_config=config)
+        agents = create_monte_carlo_agents(height, width, num_agents=num_agents, sim_config=config, kernel_path=kernel_path_used)
+    elif agent_type == "dsb_abba":
+        # Load agent configs from JSON
+        try:
+            agent_configs = load_agent_configurations()
+        except (FileNotFoundError, ValueError):
+            # Fallback to hardcoded configs if JSON loading fails
+            agent_configs = [
+                {"name": "Aurora-1", "inclination_deg": 25.0, "phase_deg": 0.0, "latitude_offset": 0.0},
+                {"name": "Borealis-2", "inclination_deg": 55.0, "phase_deg": 72.0, "latitude_offset": 5.0},
+                {"name": "Zenith-3", "inclination_deg": 10.0, "phase_deg": 144.0, "latitude_offset": -8.0},
+                {"name": "Polaris-4", "inclination_deg": 40.0, "phase_deg": 216.0, "latitude_offset": 3.0},
+                {"name": "Vega-5", "inclination_deg": 30.0, "phase_deg": 288.0, "latitude_offset": -5.0},
+            ]
+        # Use config event_utility (already configured for kernel mode if needed)
+        event_utility_final = config.event_utility.copy()
+        if kernel_path_used and 2 not in event_utility_final:
+            event_utility_final[2] = 0.5
+        agents = create_dsb_abba_agents(height, width, num_agents=num_agents, sim_config=config, event_utility=event_utility_final, kernel_path=kernel_path_used)
+        # Create ground stations for DSB-ABBA (it needs communication)
+        ground_stations = create_ground_stations_from_agent_configs(
+            agent_configs[:num_agents],
+            orbit_period=config.orbit_period,
+            num_stations=config.num_ground_stations,
+            min_satellites_per_station=config.min_satellites_per_station,
+            communication_range_deg=config.communication_range_deg,
+        )
+    elif agent_type == "attentionCTDE":
+        # CTDE agents require training first before execution
+        print("\n" + "="*70)
+        print("ATTENTION CTDE AGENTS: Training Phase")
+        print("="*70)
+        
+        from environment_simulation.agents.satellite_attention_training import (
+            train_satellite_centralized_agents,
+            create_satellite_centralized_agents,
+        )
+        from environment_simulation.agents.satellite_attention_trainer import (
+            CentralizedPPOTrainer,
+        )
+        
+        # Create training environment (separate from evaluation environment)
+        training_env = create_environment(height, width, kernel_path=kernel_path)
+        training_env.reset()
+        
+        # Detect num_states from environment
+        num_states = 3 if kernel_path_used else 2
+        
+        # Create agents with shared networks (untrained initially)
+        agents = create_satellite_centralized_agents(
+            height=height,
+            width=width,
+            num_agents=num_agents,
+            sim_config=config,
+            num_states=num_states,  # Pass num_states for proper belief and network initialization
+        )
+        # Create ground stations for communication during execution
+        # During training, we use ideal centralized belief (no communication needed)
+        # During execution, agents use ground station communication to build centralized belief
+        try:
+            agent_configs = load_agent_configurations()
+        except (FileNotFoundError, ValueError):
+            agent_configs = [
+                {"name": "Aurora-1", "inclination_deg": 25.0, "phase_deg": 0.0, "latitude_offset": 0.0, "color": "#ffd166"},
+                {"name": "Borealis-2", "inclination_deg": 55.0, "phase_deg": 72.0, "latitude_offset": 5.0, "color": "#4ecdc4"},
+                {"name": "Zenith-3", "inclination_deg": 10.0, "phase_deg": 144.0, "latitude_offset": -8.0, "color": "#ff6b6b"},
+                {"name": "Polaris-4", "inclination_deg": 40.0, "phase_deg": 216.0, "latitude_offset": 3.0, "color": "#95e1d3"},
+                {"name": "Vega-5", "inclination_deg": 30.0, "phase_deg": 288.0, "latitude_offset": -5.0, "color": "#f38181"},
+            ]
+        
+        agent_configs_for_gs = agent_configs[:num_agents].copy()
+        for agent_config in agent_configs_for_gs:
+            agent_config["field_of_regard_deg"] = config.field_of_regard_deg
+        
+        ground_stations = create_ground_stations_from_agent_configs(
+            agent_configs_for_gs,
+            orbit_period=config.orbit_period,
+            num_stations=config.num_ground_stations,
+            min_satellites_per_station=config.min_satellites_per_station,
+            communication_range_deg=config.communication_range_deg,
+        )
+        
+        # Get lat/lon grids for training
+        lat_grid, lon_grid = create_lat_lon_grids(height, width)
+        
+        # Create trainer (standard PPO for fully centralized RL)
+        shared_actor = agents[0].actor_network
+        shared_critic = agents[0].critic_network
+        
+        # Detect GPU availability
+        import torch
+        if torch.cuda.is_available():
+            device = "cuda"
+            print(f"[AttentionCTDE] Using GPU: {torch.cuda.get_device_name(0)}")
+            print(f"[AttentionCTDE] GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        else:
+            device = "cpu"
+            print("[AttentionCTDE] Using CPU (GPU not available)")
+        
+        trainer = CentralizedPPOTrainer(
+            actor_network=shared_actor,
+            critic_network=shared_critic,
+            actor_lr=2e-3,  # Increased from 5e-4 for faster learning
+            critic_lr=2e-3,  # Increased from 5e-4 for faster learning
+            gamma=0.99,
+            lambda_gae=0.95,
+            clip_epsilon=0.2,
+            entropy_coef=0.1,  # Increased from 0.02 for more exploration
+            value_coef=0.5,
+            max_grad_norm=1.0,  # Increased from 0.5 (less aggressive clipping)
+            device=device,
+        )
+        
+        # Train agents
+        centralized_episodes = max(200, num_steps)  # Longer training
+        centralized_steps_per_episode = min(num_steps, 240)  # Longer episodes
+        print(f"\n[AttentionCTDE] Training agents for {centralized_episodes} episodes...")
+        print("[AttentionCTDE] (This may take a few minutes)")
+        
+        train_satellite_centralized_agents(
+            env=training_env,
+            agents=agents,
+            lat_grid=lat_grid,
+            lon_grid=lon_grid,
+            trainer=trainer,
+            num_episodes=centralized_episodes,
+            episode_length=centralized_steps_per_episode,
+            update_frequency=10,
+            update_iterations=10,  # Increased from 5 for more updates per batch
+            w_h=config.w_h,
+            w_v=config.w_v,
+            event_utility=config.event_utility,
+            gamma=0.99,
+            verbose=True,
+        )
+        
+        # Set agents to execution mode
+        for agent in agents:
+            agent.training_mode = False
+            agent.deterministic_execution = False
+            # Verify networks are set
+            if agent.actor_network is None:
+                raise ValueError(f"Agent {agent.name} has no actor network after training!")
+            if agent.critic_network is None:
+                raise ValueError(f"Agent {agent.name} has no critic network after training!")
+        
+        print(f"\n[AttentionCTDE] Training complete!")
+        print(f"[AttentionCTDE] Verified {len(agents)} agents have trained networks")
+        print("[AttentionCTDE] Starting evaluation with trained agents...\n")
     else:
         # Fallback for other agent types
-        agents = create_monte_carlo_agents(height, width, num_agents=num_agents, sim_config=config)
+        agents = create_monte_carlo_agents(height, width, num_agents=num_agents, sim_config=config, kernel_path=kernel_path)
     
     # Create latitude/longitude grids
     lat_grid, lon_grid = create_lat_lon_grids(height, width)
@@ -1428,16 +1984,25 @@ def main(
 
 if __name__ == "__main__":
     # Configure simulation parameters using centralized config
-    # For case study with 5 agents and 4 ground stations, use DEFAULT_CONFIG
-    # (which is now configured for 5 agents and 4 stations)
+    # All parameters can be configured in environment_simulation/configs/default.json
+    # or by modifying DEFAULT_CONFIG programmatically
     config = DEFAULT_CONFIG
     
+    # Override specific config values here if needed (or edit default.json)
+    # config.w_h = 3.0  # Example: increase information gain weight
+    # config.w_v = 1.0  # Example: event detection value weight
+    # config.kernel_path = "learned_kernels/learned_kernel_1000_500.pkl"  # Enable kernel mode
+    # config.event_utility = {0: 0.0, 1: 1.0, 2: 0.5}  # 3-state utilities for kernel mode
+    
     animation_interval = 150  # Milliseconds between frames
+    
+    # Use kernel_path from config if not explicitly set
+    kernel_path = config.kernel_path  # Can override here: kernel_path = "learned_kernels/learned_kernel_1000_500.pkl"
     
     # Create environment ONCE before the loop to record evolution
     # All agent types will replay the exact same sequence of environmental changes
     print("Creating and recording environment evolution for fair comparison...")
-    recording_env = create_environment(config.grid_height, config.grid_width)
+    recording_env = create_environment(config.grid_height, config.grid_width, kernel_path=kernel_path)
     
     # Record the environment evolution (this modifies recording_env in place)
     print(f"Recording {config.num_steps} steps of environment evolution...")
@@ -1449,14 +2014,14 @@ if __name__ == "__main__":
     # Keep the original environment for transition kernel queries
     # Agents need access to the original environment's transition_probability
     # and _iter_neighbors methods for belief updates
-    original_env = create_environment(config.grid_height, config.grid_width)
+    original_env = create_environment(config.grid_height, config.grid_width, kernel_path=kernel_path)
     
     # Create ONE timestamp folder for this entire run (all methods will use the same timestamp)
     timestamp_path = create_timestamp_folder()
     print(f"\nResults will be saved to: {os.path.abspath(timestamp_path)}")
     
     # Run simulation for each agent type with the SAME recorded evolution
-    for agent_type in ["random", "greedy","sharing","monte_carlo"]:
+    for agent_type in ["dsb_abba","greedy","monte_carlo", "sharing"]:
         print(f"\n{'='*70}")
         print(f"Running simulation for {agent_type.upper()} agents (replaying recorded evolution)")
         print(f"{'='*70}")
@@ -1476,5 +2041,6 @@ if __name__ == "__main__":
             env=replay_env,  # Use the replay environment (deterministic)
             original_env=original_env,  # Original env for transition kernel
             results_timestamp_path=timestamp_path,  # Use the same timestamp folder for all methods
+            kernel_path=kernel_path,  # Pass kernel_path for kernel mode
         )
 

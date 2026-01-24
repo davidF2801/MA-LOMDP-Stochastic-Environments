@@ -216,45 +216,45 @@ class GlobeFireAnimator:
                 marker._offsets3d = (px.flatten(), py.flatten(), pz.flatten())
                 
                 # Get the action taken at current step from simulation
+                # NOTE: Actions are stored at step N (before env.step() increments time to N+1)
+                # So we need to look for actions at env.time - 1, or use frame number directly
                 if self.simulation is not None:
+                    # Actions are stored at the step BEFORE env.step() increments time
+                    # So if env.time = N, actions were stored at step N-1
+                    # But for frame 0, env.time might be 0 or 1 depending on when step() was called
+                    # The safest approach: try both env.time and env.time - 1
                     current_step = self.env.time
-                    # Debug: print available steps (only for first few steps)
-                    if current_step <= 2 and len(self.simulation.current_actions) > 0:
-                        available_steps = sorted(list(self.simulation.current_actions.keys()))
-                        print(f"  DEBUG: Step {current_step}, Available action steps: {available_steps[:10]}")
+                    action_step = max(0, current_step - 1)  # Actions are stored at step before env.step() increments
                     
-                    if current_step in self.simulation.current_actions:
+                    # Try action_step first (most common case)
+                    found_action = False
+                    if action_step >= 0 and action_step in self.simulation.current_actions:
+                        if agent.name in self.simulation.current_actions[action_step]:
+                            action_mask = self.simulation.current_actions[action_step][agent.name]
+                            found_action = True
+                    
+                    # Fallback: try current_step (for frame 0 case)
+                    if not found_action and current_step >= 0 and current_step in self.simulation.current_actions:
                         if agent.name in self.simulation.current_actions[current_step]:
                             action_mask = self.simulation.current_actions[current_step][agent.name]
-                            # Ensure action_mask is the correct shape
-                            if action_mask.shape == (self.env.height, self.env.width):
-                                # Flatten and combine with other agents' actions
-                                action_flat = action_mask.flatten()
-                                num_cells = np.sum(action_flat)
-                                if num_cells > 0:
-                                    current_actions |= action_flat
-                                    if current_step <= 2:
-                                        print(f"  DEBUG: Added {num_cells} FOV cells for {agent.name} at step {current_step}")
-                                else:
-                                    if current_step <= 2:
-                                        print(f"  DEBUG: Empty action mask for {agent.name} at step {current_step}")
-                            else:
-                                # If shape doesn't match, try to reshape
-                                try:
-                                    action_mask_flat = action_mask.reshape(self.env.height, self.env.width).flatten()
-                                    current_actions |= action_mask_flat
-                                except ValueError:
-                                    # Shape mismatch - skip this agent's action
-                                    if current_step <= 2:
-                                        print(f"  DEBUG: Shape mismatch for {agent.name}: {action_mask.shape} vs ({self.env.height}, {self.env.width})")
+                            found_action = True
+                    
+                    if found_action:
+                        # Ensure action_mask is the correct shape
+                        if action_mask.shape == (self.env.height, self.env.width):
+                            # Flatten and combine with other agents' actions
+                            action_flat = action_mask.flatten()
+                            num_cells = np.sum(action_flat)
+                            if num_cells > 0:
+                                current_actions |= action_flat
                         else:
-                            if current_step <= 2:
-                                agent_names = list(self.simulation.current_actions[current_step].keys())
-                                print(f"  DEBUG: {agent.name} not in step {current_step}. Available agents: {agent_names}")
-                    else:
-                        if current_step <= 2:
-                            available = sorted(list(self.simulation.current_actions.keys()))
-                            print(f"  DEBUG: Step {current_step} not found. Available steps: {available[:5]}")
+                            # If shape doesn't match, try to reshape
+                            try:
+                                action_mask_flat = action_mask.reshape(self.env.height, self.env.width).flatten()
+                                current_actions |= action_mask_flat
+                            except ValueError:
+                                # Shape mismatch - skip this agent's action
+                                pass
 
             # Field of Regard (FOR) overlay - gold/yellow, semi-transparent
             # Show all FOR cells, but make cells that are also in FOV slightly darker
