@@ -19,7 +19,7 @@ import ..Agents.BeliefManagement
 import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
        ..Agents.BeliefManagement.calculate_uncertainty_from_distribution, ..Agents.BeliefManagement.predict_belief_rsp,
        ..Agents.BeliefManagement.evolve_no_obs, ..Agents.BeliefManagement.get_neighbor_beliefs,
-       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.product,
+       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.prob_product,
        ..Agents.BeliefManagement.normalize_belief_distributions, ..Agents.BeliefManagement.collapse_belief_to,
        ..Agents.BeliefManagement.enumerate_all_possible_outcomes, ..Agents.BeliefManagement.merge_equivalent_beliefs,
        ..Agents.BeliefManagement.beliefs_are_equivalent, ..Agents.BeliefManagement.calculate_cell_entropy, 

@@ -22,7 +22,7 @@ import ..Agents.BeliefManagement
 import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
        ..Agents.BeliefManagement.calculate_uncertainty_from_distribution, ..Agents.BeliefManagement.predict_belief_rsp,
        ..Agents.BeliefManagement.evolve_no_obs, ..Agents.BeliefManagement.get_neighbor_beliefs,
-       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.product,
+       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.prob_product,
        ..Agents.BeliefManagement.normalize_belief_distributions, ..Agents.BeliefManagement.collapse_belief_to,
        ..Agents.BeliefManagement.enumerate_all_possible_outcomes, ..Agents.BeliefManagement.merge_equivalent_beliefs,
        ..Agents.BeliefManagement.calculate_cell_entropy, ..Agents.BeliefManagement.get_event_probability,
@@ -50,7 +50,8 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     clear_belief_evolution_cache!()
     
     # Enumerate all possible action sequences of length C considering trajectory
-    action_sequences = generate_action_sequences(agent, env, C, agent.phase_offset)
+    # Use absolute timesteps from gs_state to ensure actions are feasible at execution time
+    action_sequences = generate_action_sequences(agent, env, C, gs_state, agent.phase_offset)
 
     if isempty(action_sequences)
         end_time = time()
@@ -92,24 +93,30 @@ end
 """
 Generate all possible action sequences of length C considering agent trajectory
 """
-function generate_action_sequences(agent, env, C::Int, phase_offset::Int=0)
+function generate_action_sequences(agent, env, C::Int, gs_state_or_start_time, phase_offset::Int=0)
     if C == 0
         return Vector{SensingAction}[]
     end
     
-    # 1. Propagate agent trajectory for C timesteps
-    trajectory_positions = Vector{Tuple{Int, Int}}()
-    for t in 0:(C-1)
-        pos = get_position_at_time(agent.trajectory, t)
-        push!(trajectory_positions, pos)
+    # Determine starting global timestep
+    # If gs_state_or_start_time is a gs_state, use its time_step
+    # If it's an integer, use it directly as the start time
+    if typeof(gs_state_or_start_time) <: Integer
+        start_global_time = gs_state_or_start_time
+    else
+        start_global_time = gs_state_or_start_time.time_step
     end
     
-    # 2. Get available actions for each timestep
+    # 1. Get available actions for each timestep using ABSOLUTE timesteps
+    # This ensures actions are feasible at the actual execution time
     actions_per_timestep = Vector{Vector{SensingAction}}()
     theoretical_total = 1  # Start with 1 for multiplication
     
     for t in 1:C
-        pos = trajectory_positions[t]
+        # Calculate absolute timestep when this action will be executed
+        global_timestep = start_global_time + t - 1
+        # Get agent position at the actual execution time
+        pos = get_position_at_time(agent.trajectory, global_timestep, agent.phase_offset)
         for_cells = get_field_of_regard_at_position(agent, pos, env)
         
         # Generate actions for this timestep
@@ -579,7 +586,8 @@ function generate_sub_plans(seq, C, env, belief_branches_vector, gs_state, t_sta
     timestep_actions = Dict{Int, SensingAction}()
     phase_offset = mod(t_start, agent.trajectory.period)
     seq_length = t_end - t_start
-    action_sequences = generate_action_sequences(agent, env, seq_length, phase_offset)
+    # Pass t_start as the starting global timestep
+    action_sequences = generate_action_sequences(agent, env, seq_length, t_start, phase_offset)
     # Evaluate all possible action sequences
     best_sequence = SensingAction[]
     best_value = -Inf

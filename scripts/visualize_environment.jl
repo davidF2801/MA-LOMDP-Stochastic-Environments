@@ -658,15 +658,15 @@ function main_visualization()
     
     # Save animations as GIFs
     animation_filename = joinpath(output_dir, "environment_evolution_dbn_$(config_str).gif")
-    gif(anim, animation_filename, fps=2)
+    gif(anim, animation_filename, fps=4)  # 2x faster animation
     println("✓ DBN Animation saved as '$(animation_filename)'")
     
     belief_animation_filename = joinpath(output_dir, "belief_evolution_dbn_$(config_str).gif")
-    gif(belief_anim, belief_animation_filename, fps=2)
+    gif(belief_anim, belief_animation_filename, fps=4)  # 2x faster animation
     println("✓ Belief Animation saved as '$(belief_animation_filename)'")
     
     uncertainty_animation_filename = joinpath(output_dir, "uncertainty_evolution_dbn_$(config_str).gif")
-    gif(uncertainty_anim, uncertainty_animation_filename, fps=2)
+    gif(uncertainty_anim, uncertainty_animation_filename, fps=4)  # 2x faster animation
     println("✓ Uncertainty Animation saved as '$(uncertainty_animation_filename)'")
     
     # Save plots
@@ -760,7 +760,7 @@ function interactive_visualization()
         # Create animation for this parameter set
         anim = create_environment_animation(evolution, event_counts, dbn_model)
         animation_filename = joinpath(output_dir, "environment_$(name)_$(config_str).gif")
-        gif(anim, animation_filename, fps=2)
+        gif(anim, animation_filename, fps=4)  # 2x faster animation
         
         println("✓ Saved animation: $(basename(animation_filename))")
     end

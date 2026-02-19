@@ -7,6 +7,12 @@ Demonstrates circular trajectories with partial overlap and 9-cell Field of Rega
 
 println("🚀 RSP 9x9 Circular Trajectory Test starting...")
 
+# Redirect temp directory to E: drive to avoid C: disk space issues
+mkpath("E:/tmp")
+ENV["TMPDIR"] = "E:/tmp"
+ENV["TEMP"]   = "E:/tmp"
+ENV["TMP"]    = "E:/tmp"
+
 using POMDPs
 using POMDPTools
 using Random
@@ -29,7 +35,7 @@ using Infiltrator
 const NUM_STEPS = 100            # Total simulation steps (reduced for quick test)
 const PLANNING_MODE = :pbvi_policy_tree         # Test PBVI policy tree planning
 #const modes = [:pbvi, :prior_based, :random]
-const modes = [:prior_based, :random, :greedy, :pbvi_1_0_0_0, :pbvi_0_5_0_5, :pbvi_0_0_1_0]  # Test only the policy tree mode
+const modes = [:pomcp, :oracle, :prior_based, :random, :greedy, :pbvi_1_0_0_0, :pbvi_0_5_0_5, :pbvi_0_0_1_0]  # Test only the policy tree mode
 const N_RUNS = 200  # Single run for quick test
 const MAX_BATTERY = 10000.0
 const CHARGING_RATE = 3.0
@@ -298,9 +304,9 @@ function create_environment_distribution_plot(param_maps::Types.RSPParameterMaps
         aspect_ratio=:equal,
         size=(400, 300))
     
-    p4 = heatmap(param_maps.mu_map, 
-        title="μ (Death Probability)", 
-        colorbar_title="μ",
+    p4 = heatmap(param_maps.beta0_map, 
+        title="β₀ (Spontaneous Ignition Rate)", 
+        colorbar_title="β₀",
         colormap=:plasma,
         aspect_ratio=:equal,
         size=(400, 300))
@@ -309,7 +315,6 @@ function create_environment_distribution_plot(param_maps::Types.RSPParameterMaps
     combined_plot = plot(p1, p2, p3, p4, 
         layout=(2,2), 
         size=(800, 600),
-        title="Heterogeneous RSP Environment Parameters - Grid $(GRID_WIDTH)x$(GRID_HEIGHT), Run $(run_number)",
         titlefontsize=12)
     
     # Save the plot
@@ -328,7 +333,9 @@ function visualize_rsp_state(
     agents::Vector{Agent},
     environment_state::Matrix{EventState}=fill(NO_EVENT, GRID_HEIGHT, GRID_WIDTH),
     actions::Vector{SensingAction}=SensingAction[],
-    ground_station_pos::Tuple{Int, Int}=(GROUND_STATION_X, GROUND_STATION_Y)
+    ground_station_pos::Tuple{Int, Int}=(GROUND_STATION_X, GROUND_STATION_Y);
+    events_detected::Int=0,
+    avg_uncertainty::Float64=0.0
 )
     height, width = size(environment_state)
     agent_colors = [:red, :blue, :green, :orange]  # 4 different colors for 4 agents
@@ -338,7 +345,7 @@ function visualize_rsp_state(
         aspect_ratio=:equal, size=(800, 800), legend=false,  # Larger size for 9x9 grid
         xlabel="X Coordinate", ylabel="Y Coordinate",
         grid=false,
-        title="RSP $(width)x$(height) Circular Trajectories - Time Step $(time_step) - γ=$(DISCOUNT_FACTOR), Events: $(count(==(EVENT_PRESENT), environment_state)) | Agents: $(length(agents))",
+        title="RSP $(width)x$(height) Circular Trajectories - Time Step $(time_step) - γ=$(DISCOUNT_FACTOR), Events: $(count(==(EVENT_PRESENT), environment_state)) | Agents: $(length(agents)) | Detected: $(events_detected) | Avg Uncertainty: $(round(avg_uncertainty, digits=3))",
         titlefontsize=12,
         background_color=:white
     )
@@ -424,7 +431,9 @@ function create_rsp_animation(
     ground_station_pos::Tuple{Int, Int}=(GROUND_STATION_X, GROUND_STATION_Y),
     results_dir::String="",
     run_number::Int=1,
-    planning_mode::Symbol=:script
+    planning_mode::Symbol=:script;
+    events_detected_per_timestep::Vector{Int}=Int[],
+    avg_uncertainty_per_timestep::Vector{Float64}=Float64[]
 )
     println("\n🎬 Creating RSP Simulation Animation")
     println("====================================")
@@ -453,8 +462,22 @@ function create_rsp_animation(
             SensingAction[]
         end
         
+        # Get events detected and uncertainty for this step
+        events_detected = if step < length(events_detected_per_timestep)
+            events_detected_per_timestep[step + 1]
+        else
+            0
+        end
+        
+        avg_uncertainty = if step < length(avg_uncertainty_per_timestep)
+            avg_uncertainty_per_timestep[step + 1]
+        else
+            0.0
+        end
+        
         # Create frame
-        frame = visualize_rsp_state(step, agents, env_state, actions, ground_station_pos)
+        frame = visualize_rsp_state(step, agents, env_state, actions, ground_station_pos; 
+                                  events_detected=events_detected, avg_uncertainty=avg_uncertainty)
         push!(frames, frame)
     end
     
@@ -465,7 +488,7 @@ function create_rsp_animation(
     
     # Save animation with new naming convention
     animation_filename = joinpath(animations_dir, "rsp_$(GRID_WIDTH)x$(GRID_HEIGHT)_$(planning_mode)_run$(run_number).gif")
-    gif(anim, animation_filename, fps=0.5)  # Slower animation
+    gif(anim, animation_filename, fps=1.0)  # 2x faster animation
     println("✓ Saved animation: $(basename(animation_filename))")
     
     return anim
@@ -478,7 +501,9 @@ function create_belief_event_animation(
     belief_event_present_evolution::Vector{Matrix{Float64}},
     results_dir::String="",
     run_number::Int=1,
-    planning_mode::Symbol=:script
+    planning_mode::Symbol=:script;
+    events_detected_per_timestep::Vector{Int}=Int[],
+    avg_uncertainty_per_timestep::Vector{Float64}=Float64[]
 )
     println("\n🎬 Creating Belief Animation (P(Event Present))")
     println("=============================================")
@@ -491,9 +516,22 @@ function create_belief_event_animation(
 
     # Build frames as heatmaps with fixed color limits [0, 1]
     anim = @animate for (t, prob_map) in enumerate(belief_event_present_evolution)
+        # Get events detected and uncertainty for this timestep
+        events_detected = if t <= length(events_detected_per_timestep)
+            events_detected_per_timestep[t]
+        else
+            0
+        end
+        
+        avg_uncertainty = if t <= length(avg_uncertainty_per_timestep)
+            avg_uncertainty_per_timestep[t]
+        else
+            0.0
+        end
+        
         heatmap(
             prob_map;
-            title = "Belief P(Event) — t=$(t - 1)",
+            title = "Belief P(Event) — t=$(t - 1) | Detected: $(events_detected) | Avg Uncertainty: $(round(avg_uncertainty, digits=3))",
             xlabel = "X Coordinate",
             ylabel = "Y Coordinate",
             aspect_ratio = :equal,
@@ -505,7 +543,7 @@ function create_belief_event_animation(
     end
 
     gif_filename = joinpath(animations_dir, "belief_event_present_$(GRID_WIDTH)x$(GRID_HEIGHT)_$(planning_mode)_run$(run_number).gif")
-    gif(anim, gif_filename, fps=1.5)
+    gif(anim, gif_filename, fps=3.0)  # 2x faster animation
     println("✓ Saved belief animation: $(basename(gif_filename))")
 
     return anim
@@ -726,7 +764,6 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     
     # Initialize ground station
     gs_state = GroundStation.initialize_ground_station(env, agents, num_states=2)
-    @infiltrate
     # Initialize enhanced event tracker
     event_tracker = initialize_enhanced_event_tracker()
     
@@ -742,9 +779,14 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     average_uncertainty_per_timestep = Float64[]
     # Track belief of EVENT_PRESENT per cell over time
     belief_event_present_evolution = Matrix{Float64}[]
+    # Track events detected per timestep for animation labels
+    events_detected_per_timestep = Int[]
 
     # Get initial environment state from replay
     current_environment = get_replay_state(replay_env, 0)
+    
+    # Set env.current_state for oracle planner access
+    env.current_state = current_environment
 
     # Initialize previous environment state for event tracking
     prev_environment = copy(current_environment)
@@ -816,6 +858,17 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
         # Mark events as observed with detection time tracking
         mark_observed_events_with_time!(event_tracker, agent_observations, t)
         
+        # Count events detected in this timestep
+        events_detected_this_step = 0
+        for (agent_id, observations) in agent_observations
+            for (cell, observed_state) in observations
+                if observed_state == EVENT_PRESENT
+                    events_detected_this_step += 1
+                end
+            end
+        end
+        push!(events_detected_per_timestep, events_detected_this_step)
+        
         # Record environment state and actions for visualization
         push!(environment_evolution, copy(current_environment))
         push!(action_history, joint_actions)
@@ -827,7 +880,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
             t_clean = minimum([tau[j] for j in keys(tau)])
             
             # Roll forward deterministically from uniform belief to t_clean using known observations
-            B = GroundStation.initialize_global_belief(env)
+            B = MacroPlannerAsync.initialize_uniform_belief(env)
             for t_roll in 0:(t_clean-1)
                 B = evolve_no_obs(B, env)  # Contagion-aware update
                 # Apply known observations (perfect observations)
@@ -869,6 +922,9 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
         if t < num_steps - 1
             # Get next state from replay
             current_environment = get_replay_state(replay_env, t + 1)
+            
+            # Set env.current_state for oracle planner access
+            env.current_state = current_environment
             
             # Update event tracking for the new timestep
             update_enhanced_event_tracking!(event_tracker, prev_environment, current_environment, t + 1)
@@ -912,7 +968,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     println("  Planning horizon: $(PLANNING_HORIZON)")
     println("  Dynamics: RSP (Replay)")
     
-    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history, event_tracker, uncertainty_evolution, average_uncertainty_per_timestep, ndd_life, belief_event_present_evolution
+    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history, event_tracker, uncertainty_evolution, average_uncertainty_per_timestep, ndd_life, belief_event_present_evolution, events_detected_per_timestep
 end
 
 # =============================================================================
@@ -988,7 +1044,7 @@ for n in 1:N_RUNS
         create_environment_distribution_plot(replay_env.env.rsp_params, results_base_dir, n)
 
         # Run the simulation with replay
-        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, uncertainty_avg, ndd_life, belief_event_present_evolution = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, actual_planning_mode)
+        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, uncertainty_avg, ndd_life, belief_event_present_evolution, events_detected_per_timestep = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, actual_planning_mode)
 
         println("\n✅ RSP test completed!")
         println("📊 Final event observation percentage: $(round(percentage, digits=1))%")
@@ -1050,10 +1106,12 @@ for n in 1:N_RUNS
         println("============================")
         
         # Create simulation animation
-        anim = create_rsp_animation(agents, NUM_STEPS, env_evolution, action_history, (GROUND_STATION_X, GROUND_STATION_Y), results_base_dir, n, PLANNING_MODE)
+        anim = create_rsp_animation(agents, NUM_STEPS, env_evolution, action_history, (GROUND_STATION_X, GROUND_STATION_Y), results_base_dir, n, PLANNING_MODE; 
+                                  events_detected_per_timestep=events_detected_per_timestep, avg_uncertainty_per_timestep=uncertainty_avg)
         
         # Create belief animation for P(Event Present)
-        create_belief_event_animation(belief_event_present_evolution, results_base_dir, n, PLANNING_MODE)
+        create_belief_event_animation(belief_event_present_evolution, results_base_dir, n, PLANNING_MODE; 
+                                    events_detected_per_timestep=events_detected_per_timestep, avg_uncertainty_per_timestep=uncertainty_avg)
         
         println("\n✅ RSP simulation completed!")
         println("📁 Check the results folder for:")

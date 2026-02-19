@@ -18,6 +18,10 @@ include("macro_planner_greedy.jl")
 include("macro_planner_prior_based.jl")
 include("macro_planner_pbvi.jl")
 include("macro_planner_pbvi_policy_tree.jl")
+include("macro_planner_oracle.jl")
+include("macro_planner_pbvi_mis.jl")
+include("macro_planner_mpomdp_openloop.jl")
+include("macro_planner_pomcp.jl")
 
 using .MacroPlannerAsync
 using .MacroPlannerAsyncApprox
@@ -28,6 +32,10 @@ using .MacroPlannerGreedy
 using .MacroPlannerPriorBased
 using .MacroPlannerPBVI
 using .AsyncPBVIPolicyTree
+using .MacroPlannerOracle
+using .MacroPlannerPBVIMIS
+using .MacroPlannerMPOMDPOpenLoop
+using .MacroPlannerPOMCP
 
 # Import Agent type from TrajectoryPlanner
 include("../agents/trajectory_planner.jl")
@@ -58,9 +66,12 @@ mutable struct GroundStationState
     agent_plan_types::Dict{Int, Symbol}  # :script or :policy for each agent
     agent_observation_history::Dict{Int, Vector{Tuple{Int, Tuple{Int, Int}, EventState}}}  # (timestep, cell, observed_state) for each agent
     time_step::Int
+    last_clean_time::Int  # Last time when system had fully consistent belief (all agents aligned)
     planning_times::Dict{Int, Vector{Float64}}  # Planning times for each agent
     total_planning_time::Float64  # Total planning time across all agents
     num_plans_computed::Int  # Total number of plans computed
+    joint_plan::Union{Vector{Any}, Nothing}  # Joint plan for MPOMDP (Vector{JointAction})
+    joint_plan_last_sync::Int  # Last sync time for joint plan
 end
 
 """
@@ -79,6 +90,79 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
     
     println("🛰️  Ground Station: Checking for sync opportunities at time $(t)")
     gs_state.time_step = t
+    
+    # Special handling for MPOMDP: plan for all agents at once
+    if planning_mode == :mpomdp_openloop
+        # Check if any agent is in range
+        agents_in_range = [agent for agent in agents if in_range(agent, t, env, env.ground_station_pos)]
+        
+        if !isempty(agents_in_range)
+            println("🤖 MPOMDP Open-Loop: Planning for all $(length(agents)) agents simultaneously")
+            
+            # Upload all observations from all agents
+            for agent in agents
+                agent_id = agent.id
+                observations = get_agent_observations_since_sync(agent, gs_state.agent_last_sync[agent_id], t)
+                
+                # Store observations
+                for (obs_idx, observation) in enumerate(observations)
+                    for (i, cell) in enumerate(observation.sensed_cells)
+                        if i <= length(observation.event_states)
+                            observed_state = observation.event_states[i]
+                            obs_timestep = gs_state.agent_last_sync[agent_id] + obs_idx-1
+                            push!(gs_state.agent_observation_history[agent_id], (obs_timestep, cell, observed_state))
+                        end
+                    end
+                end
+                update_global_belief!(gs_state.global_belief, observations, env, gs_state, t)
+            end
+            
+            # Calculate contact horizon (use minimum for all agents)
+            C = minimum([calculate_contact_horizon(agent, t, env) for agent in agents])
+            println("⏰ Contact horizon for MPOMDP: $(C) steps")
+            
+            # Sort agents by id for consistent ordering
+            sorted_agents = sort(agents, by=a -> a.id)
+            
+            # Plan joint actions for all agents
+            joint_plan, planning_time = MacroPlannerMPOMDPOpenLoop.best_joint_plan_mpomdp(
+                env, gs_state.global_belief, sorted_agents, C, gs_state, rng=rng
+            )
+            
+            # Store joint plan
+            gs_state.joint_plan = joint_plan
+            gs_state.joint_plan_last_sync = t
+            
+            # Extract individual agent plans from joint plan and store them
+            for agent in agents
+                agent_id = agent.id
+                gs_state.agent_plan_types[agent_id] = :mpomdp_openloop
+                
+                # Extract this agent's actions from joint plan
+                # Actions in JointAction are ordered by sorted_agents (sorted by id)
+                agent_idx = findfirst(a -> a.id == agent_id, sorted_agents)
+                agent_plan = [joint_action.actions[agent_idx] for joint_action in joint_plan]
+                gs_state.agent_plans[agent_id] = agent_plan
+                agent.plan_index = 1
+                
+                # Track planning time (divide by number of agents since it's one plan for all)
+                push!(gs_state.planning_times[agent_id], planning_time / length(agents))
+                gs_state.total_planning_time += planning_time / length(agents)
+            end
+            
+            gs_state.num_plans_computed += 1
+            
+            # Update last sync time for all agents
+            for agent in agents
+                gs_state.agent_last_sync[agent.id] = t
+            end
+            
+            println("✅ MPOMDP Open-Loop: Joint plan computed in $(round(planning_time, digits=3)) seconds")
+            return  # Exit early, don't process agents individually
+        end
+    end
+    
+    # Normal per-agent planning (existing logic)
     for (i, agent) in enumerate(agents)
         agent_id = agent.id
         # Check if agent is in range for synchronization
@@ -186,12 +270,46 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("📊 Computing prior-based plan for agent $(agent_id)")
                 new_plan, planning_time = MacroPlannerPriorBased.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
                 gs_state.agent_plan_types[agent_id] = :prior_based
-                
+
                 # Track planning time
                 push!(gs_state.planning_times[agent_id], planning_time)
                 gs_state.total_planning_time += planning_time
                 gs_state.num_plans_computed += 1
                 println("⏱️  Agent $(agent_id) prior-based planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :pomcp
+                println("🎲 Initializing online POMCP policy for agent $(agent_id)")
+                t_start_agent = time()
+
+                # Create an online POMCP policy object for this agent
+                pomcp_policy = MacroPlannerPOMCP.init_online_pomcp_policy(env)
+
+                # Build a reactive policy closure that uses the current global belief
+                # and reuses the same POMCP tree across timesteps.
+                reactive_policy = function (obs_history, current_time::Int)
+                    # Use the up-to-date global belief maintained by the ground station
+                    belief_now = gs_state.global_belief
+                    # Plan index relative to current sync is always 1 for online receding-horizon use
+                    return MacroPlannerPOMCP.pomcp_select_action!(pomcp_policy,
+                                                                  belief_now,
+                                                                  agent,
+                                                                  env,
+                                                                  gs_state;
+                                                                  step_offset=1,
+                                                                  n_particles=100,
+                                                                  rng=rng)
+                end
+
+                # Store reactive policy on the agent; no open-loop script is created
+                agent.reactive_policy = reactive_policy
+                gs_state.agent_plan_types[agent_id] = :pomcp_online
+
+                planning_time = time() - t_start_agent
+
+                # Track planning time (initialization only; per-step time is online)
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) POMCP (online) init time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :pbvi
                 println("🧠 Computing PBVI plan for agent $(agent_id)")
                 
@@ -214,17 +332,38 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 gs_state.total_planning_time += planning_time
                 gs_state.num_plans_computed += 1
                 println("⏱️  Agent $(agent_id) PBVI policy tree planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :oracle
+                println("🔮 Computing oracle plan for agent $(agent_id) (perfect information)")
+                new_plan, planning_time = MacroPlannerOracle.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :oracle
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) oracle planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :pbvi_mis
+                println("♻️  Computing PBVI+MIS plan for agent $(agent_id) (with trajectory reuse)")
+                
+                new_plan, planning_time = MacroPlannerPBVIMIS.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                gs_state.agent_plan_types[agent_id] = :pbvi_mis
+                
+                # Track planning time
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) PBVI+MIS planning time: $(round(planning_time, digits=3)) seconds")
             else
                 error("Unknown planning mode: $(planning_mode)")
             end
             
             # Store plan in ground station state (for non-policy modes)
-            if planning_mode != :policy && planning_mode != :pbvi_policy_tree
+            if planning_mode != :policy && planning_mode != :pbvi_policy_tree && planning_mode != :oracle && planning_mode != :pomcp
                 gs_state.agent_plans[agent_id] = new_plan
                 # Reset agent's plan index for the new plan
                 agent.plan_index = 1
             else
-                # For policy modes, the reactive policy is already stored in the agent
+                # For policy modes (including oracle and pomcp), the reactive policy is already stored in the agent
                 # No need to store anything in gs_state.agent_plans
                 # Reset agent's plan index (though not used for policies)
                 agent.plan_index = 1
@@ -247,8 +386,14 @@ function in_range(agent, t::Int, env, ground_station_pos)
     # Get agent's current position with phase offset
     current_pos = get_position_at_time(agent.trajectory, t, agent.phase_offset)
     
-    # Use the provided ground station position
-    return current_pos == ground_station_pos
+    # Calculate distance to ground station
+    dx = current_pos[1] - ground_station_pos[1]
+    dy = current_pos[2] - ground_station_pos[2]
+    distance = sqrt(dx^2 + dy^2)
+    
+    # Agent is in range if within communication range (e.g., 2.0 units)
+    comm_range = 2.5  # Communication range in grid units
+    return distance <= comm_range
 end
 
 """
@@ -302,8 +447,8 @@ function update_global_belief!(global_belief, observations::Vector{GridObservati
     println("  📊 t_clean = $(t_clean) (last time where all observation outcomes are known)")
     
     # Step 2: Roll forward deterministically from prior belief to t_clean using known observations
-    # Start with prior-based belief distribution
-    B = initialize_global_belief(env)
+    # Start with uniform belief distribution
+    B = initialize_uniform_belief(env)
     
     for t in 0:(t_clean-1)
         # Apply known observations (perfect observations)
@@ -322,6 +467,9 @@ function update_global_belief!(global_belief, observations::Vector{GridObservati
     global_belief.event_distributions = B.event_distributions
     global_belief.uncertainty_map = B.uncertainty_map
     global_belief.last_update = t_clean
+    
+    # Store t_clean in ground station state for SB-ABBA belief initialization
+    gs_state.last_clean_time = t_clean
     
     println("✅ Global belief updated till t_clean = $(t_clean)")
 end
@@ -378,7 +526,7 @@ Initialize ground station state
 """
 function initialize_ground_station(env, agents; num_states::Int=2)
     # Initialize global belief
-    global_belief = initialize_global_belief(env, num_states=num_states)
+    global_belief = initialize_uniform_belief(env, num_states=num_states)
     
     # Initialize agent tracking
     agent_last_sync = Dict{Int, Int}()
@@ -397,7 +545,7 @@ function initialize_ground_station(env, agents; num_states::Int=2)
         planning_times[agent.id] = Float64[]
     end
     
-    return GroundStationState(global_belief, agent_last_sync, agent_plans, agent_plan_types, agent_observation_history, 0, planning_times, total_planning_time, num_plans_computed)
+    return GroundStationState(global_belief, agent_last_sync, agent_plans, agent_plan_types, agent_observation_history, 0, 0, planning_times, total_planning_time, num_plans_computed, nothing, -1)
 end
 
 """
@@ -418,7 +566,17 @@ Get agent's current plan from ground station
 function get_agent_plan(agent, gs_state::GroundStationState)
     agent_id = agent.id
     
-    # Get plan from ground station state
+    # Check if MPOMDP joint plan exists and is valid
+    if gs_state.joint_plan !== nothing && gs_state.joint_plan_last_sync >= 0
+        plan_type = get(gs_state.agent_plan_types, agent_id, :mpomdp_openloop)
+        if plan_type == :mpomdp_openloop
+            # Extract this agent's plan from joint plan
+            plan = get(gs_state.agent_plans, agent_id, nothing)
+            return plan, plan_type
+        end
+    end
+    
+    # Get plan from ground station state (normal case)
     plan = get(gs_state.agent_plans, agent_id, nothing)
     plan_type = get(gs_state.agent_plan_types, agent_id, :script)
     

@@ -31,8 +31,8 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     # Start timing
     start_time = time()
     
-    # Generate simple greedy sequence
-    greedy_sequence = generate_simple_greedy_sequence(agent, env, C, belief)
+    # Generate simple greedy sequence using absolute timesteps from gs_state
+    greedy_sequence = generate_simple_greedy_sequence(agent, env, C, belief, gs_state)
     
     # End timing
     end_time = time()
@@ -45,8 +45,9 @@ end
 
 """
 Generate a simple greedy sequence for the agent - much faster than before
+Uses absolute timesteps from gs_state to ensure actions are feasible at execution time
 """
-function generate_simple_greedy_sequence(agent, env, C::Int, belief::Belief)
+function generate_simple_greedy_sequence(agent, env, C::Int, belief::Belief, gs_state)
     if C == 0
         return SensingAction[]
     end
@@ -55,8 +56,10 @@ function generate_simple_greedy_sequence(agent, env, C::Int, belief::Belief)
     current_belief = deepcopy(belief)
     
     for t in 1:C
-        # Get agent's position at this timestep
-        agent_pos = get_position_at_time(agent.trajectory, t-1)
+        # Calculate absolute timestep when this action will be executed
+        global_timestep = gs_state.time_step + t - 1
+        # Get agent's position at the actual execution time
+        agent_pos = get_position_at_time(agent.trajectory, global_timestep, agent.phase_offset)
         
         # Get available cells based on sensor pattern
         available_cells = get_field_of_regard_at_position(agent, agent_pos, env)

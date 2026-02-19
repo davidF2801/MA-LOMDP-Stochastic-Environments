@@ -37,24 +37,46 @@ println("📊 Starting postprocessing analysis...")
 # Multiple results directories to analyze - add as many as needed
 TARGET_RUNS = [
     #"run_2025-08-17T14-08-17-424",
+    #"run_2025-08-16T16-52-42-231"
     #"run_2025-08-19T10-23-17-927-new",
     # Add more run directories here as needed
     # "run_2025-08-16T16-52-26-473",
     # "run_2025-08-16T16-52-42-231",
-    "run_2025-09-08T09-36-38-974"
+    #"run_2025-09-08T09-36-38-974"
+    #"run_2026-01-29T16-25-34-037"
+    #"run_2026-01-29T16-55-16-714"
+    #"run_2026-02-04T11-36-43-894"
+    #"run_2026-02-04T18-45-16-865"
+    #"run_2026-02-06T16-06-11-775"
+    #"run_2026-02-13T09-40-14-099"
+    #"run_2026-02-14T17-12-46-276",
+    "run_2026-02-15T22-34-22-346"
 ]
 
+# Results path: relative to script location so it works regardless of cwd
+RESULTS_BASE = joinpath(@__DIR__, "..", "results")
+
+# Save plot in both PDF and PNG
+function savefig_both(p, basepath_with_ext::String)
+    savefig(p, basepath_with_ext)
+    pngpath = replace(basepath_with_ext, r"\.pdf$" => ".png")
+    if pngpath != basepath_with_ext
+        savefig(p, pngpath)
+    end
+    return basepath_with_ext
+end
 # Output directory - use the first target run folder
-OUTPUT_DIR = joinpath("..", "results", TARGET_RUNS[1])
+OUTPUT_DIR = joinpath(RESULTS_BASE, TARGET_RUNS[1])
 
 # Performance metrics to analyze
 METRICS = [:event_observation_percentage, :final_uncertainty, :average_planning_time, :ndd_actual]
 
 # Planning modes to compare
 #PLANNING_MODES = [:sweep, :script, :random]
-#PLANNING_MODES = [:script, :pbvi, :macro_approx_090, :prior_based, :sweep, :greedy, :random]
+PLANNING_MODES = [:script, :pbvi, :prior_based, :oracle, :sweep, :greedy, :random, :mpomdp_openloop, :pomcp]
+#PLANNING_MODES = [:pbvi_0_5_0_5, :pbvi_1_0_0_0, :pbvi_0_0_1_0,:oracle, :random, :prior_based, :pomcp]
 #PLANNING_MODES = [:script, :pbvi, :prior_based, :random]
-PLANNING_MODES = [:pbvi_0_0_1_0, :pbvi_0_5_0_5, :pbvi_1_0_0_0, :prior_based, :random]
+#PLANNING_MODES = [:pbvi_mis, :oracle, :pbvi_0_5_0_5]
 
 # Function to get display name for planning modes
 function get_mode_display_name(mode::Symbol)
@@ -84,7 +106,7 @@ function get_mode_display_name(mode::Symbol)
             entropy_weight = "$(entropy_int).$(entropy_dec)"
             detection_weight = "$(detection_int).$(detection_dec)"
             
-            return "SB-ABBA (wh:$(entropy_weight), wv:$(detection_weight))"
+            return "SB-ABBA\n(wh:$(entropy_weight), wv:$(detection_weight))"
         else
             return "SB-ABBA"
         end
@@ -100,7 +122,7 @@ Helper function to find all available run directories in the results folder
 Use this to discover what run directories are available for analysis
 """
 function list_available_runs()
-    results_base = joinpath("..", "results")
+    results_base = RESULTS_BASE
     if !isdir(results_base)
         println("❌ Results directory not found: $(results_base)")
         return String[]
@@ -287,7 +309,7 @@ function collect_results_data()
     
     # Process each target run directory
     for target_run in TARGET_RUNS
-        results_dir = joinpath("..", "results", target_run)
+        results_dir = joinpath(RESULTS_BASE, target_run)
         
         # Check if target directory exists
         if !isdir(results_dir)
@@ -521,20 +543,20 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
             grid=true,
             gridwidth=0.5,
             gridalpha=0.3,
-            size=(700, 700),
-            titlefontsize=20,
-            xlabelfontsize=16,
-            ylabelfontsize=16,
-            xtickfontsize=14,
-            ytickfontsize=14,
+            size=(900, 900),
+            titlefontsize=36,
+            xlabelfontsize=32,
+            ylabelfontsize=32,
+            xtickfontsize=30,
+            ytickfontsize=30,
             bottom_margin=15Plots.mm,
             left_margin=18Plots.mm,
             top_margin=15Plots.mm)
         
-        # Save plot
+        # Save plot (PDF and PNG)
         plot_filename = joinpath(output_dir, "boxplot_$(metric).pdf")
-        savefig(p, plot_filename)
-        println("    ✓ Saved: $(basename(plot_filename))")
+        savefig_both(p, plot_filename)
+        println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
         
         # Print statistics
         println("    📈 Statistics for $(metric):")
@@ -613,18 +635,18 @@ function create_uncertainty_evolution_plots(all_data::Dict{String, Dict}, output
                 grid=true,
                 gridwidth=0.5,
                 gridalpha=0.3,
-                size=(800, 600),
-                titlefontsize=20,
-                xlabelfontsize=16,
-                ylabelfontsize=16,
-                xtickfontsize=14,
-                ytickfontsize=14,
-                legendfontsize=14)
+                size=(1000, 800),
+                titlefontsize=36,
+                xlabelfontsize=32,
+                ylabelfontsize=32,
+                xtickfontsize=30,
+                ytickfontsize=30,
+                legendfontsize=30)
             
-            # Save plot
+            # Save plot (PDF and PNG)
             plot_filename = joinpath(output_dir, "uncertainty_evolution_$(timestamp).pdf")
-            savefig(p, plot_filename)
-            println("    ✓ Saved: $(basename(plot_filename))")
+            savefig_both(p, plot_filename)
+            println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
         end
     end
 end
@@ -684,18 +706,18 @@ function create_average_uncertainty_comparison(all_data::Dict{String, Dict}, out
         grid=true,
         gridwidth=0.5,
         gridalpha=0.3,
-        size=(900, 600),
-        titlefontsize=20,
-        xlabelfontsize=16,
-        ylabelfontsize=16,
-        xtickfontsize=14,
-        ytickfontsize=14,
-        legendfontsize=16)
+        size=(1200, 800),
+        titlefontsize=36,
+        xlabelfontsize=32,
+        ylabelfontsize=32,
+        xtickfontsize=30,
+        ytickfontsize=30,
+        legendfontsize=32)
     
-    # Save plot
+    # Save plot (PDF and PNG)
     plot_filename = joinpath(output_dir, "average_uncertainty_comparison.pdf")
-    savefig(p, plot_filename)
-    println("    ✓ Saved: $(basename(plot_filename))")
+    savefig_both(p, plot_filename)
+    println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
     
     return p
 end
@@ -826,12 +848,12 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
                 grid=true,
                 gridwidth=0.5,
                 gridalpha=0.3,
-                size=(500, 580),
-                titlefontsize=20,
-                xlabelfontsize=16,
-                ylabelfontsize=16,
-                xtickfontsize=14,
-                ytickfontsize=14,
+                size=(700, 780),
+                titlefontsize=32,
+                xlabelfontsize=28,
+                ylabelfontsize=28,
+                xtickfontsize=26,
+                ytickfontsize=26,
                 xrotation=45,
                 bottom_margin=15Plots.mm,
                 left_margin=18Plots.mm,
@@ -842,7 +864,7 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
                 # Position text above the bar with more offset to avoid overlap
                 y_pos = val + 0.05 * maximum(values)
                 # Use smaller font size and better positioning
-                annotate!(p, j, y_pos, text(round(val, digits=3), 12, :center, :black))
+                annotate!(p, j, y_pos, text(round(val, digits=3), 28, :center, :black))
             end
             
             push!(plots, p)
@@ -859,37 +881,37 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
     if length(plots) == 4
         combined_plot = plot(plots[1], plots[2], plots[3], plots[4],
             layout=(2,2),
-            size=(1400, 1200),
+            size=(2000, 1800),
             margin=0Plots.mm,
             link=:none,
-            wspace=-0.01,
-            hspace=-0.01)
+            wspace=-0.08,
+            hspace=-0.08)
     elseif length(plots) == 3
         combined_plot = plot(plots[1], plots[2], plots[3],
             layout=(1,3),
-            size=(1400, 700),
+            size=(2000, 1000),
             margin=0Plots.mm,
             link=:none,
-            wspace=-0.01,
-            hspace=-0.01)
+            wspace=-0.08,
+            hspace=-0.08)
     elseif length(plots) == 2
         combined_plot = plot(plots[1], plots[2],
             layout=(1,2),
-            size=(1000, 700),
+            size=(1600, 1000),
             margin=0Plots.mm,
             link=:none,
-            wspace=-0.01,
-            hspace=-0.01)
+            wspace=-0.08,
+            hspace=-0.08)
     else
         combined_plot = plot(plots[1],
-            size=(500, 700),
+            size=(800, 1000),
             margin=15Plots.mm)
     end
     
-    # Save plot
+    # Save plot (PDF and PNG)
     plot_filename = joinpath(output_dir, "averages_bar_plot.pdf")
-    savefig(combined_plot, plot_filename)
-    println("    ✓ Saved: $(basename(plot_filename))")
+    savefig_both(combined_plot, plot_filename)
+    println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
     
     return combined_plot
 end
@@ -967,11 +989,11 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
             grid=true,
             gridwidth=0.5,
             gridalpha=0.3,
-            titlefontsize=16,
-            xlabelfontsize=14,
-            ylabelfontsize=14,
-            xtickfontsize=12,
-            ytickfontsize=12,
+            titlefontsize=32,
+            xlabelfontsize=30,
+            ylabelfontsize=30,
+            xtickfontsize=28,
+            ytickfontsize=28,
             bottom_margin=15Plots.mm,
             left_margin=18Plots.mm,
             top_margin=15Plots.mm)
@@ -983,25 +1005,25 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
     # Determine optimal layout based on number of metrics
     if num_metrics == 1
         layout = (1, 1)
-        plot_size = (600, 600)
+        plot_size = (900, 900)
     elseif num_metrics == 2
         layout = (1, 2)
-        plot_size = (1200, 600)
+        plot_size = (1800, 900)
     elseif num_metrics == 3
         layout = (1, 3)
-        plot_size = (1800, 600)
+        plot_size = (2400, 900)
     elseif num_metrics == 4
         layout = (2, 2)
-        plot_size = (1400, 1200)
+        plot_size = (2000, 1800)
     elseif num_metrics <= 6
         layout = (2, 3)
-        plot_size = (1800, 800)
+        plot_size = (2400, 1200)
     else
         # For more than 6 metrics, use a grid layout
         cols = ceil(Int, sqrt(num_metrics))
         rows = ceil(Int, num_metrics / cols)
         layout = (rows, cols)
-        plot_size = (300 * cols, 300 * rows)
+        plot_size = (500 * cols, 500 * rows)
     end
     
     combined_plot = plot(plots..., 
@@ -1009,13 +1031,13 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
         size=plot_size,
         margin=0Plots.mm,
         link=:none,
-        wspace=-0.01,
-        hspace=-0.01)
+        wspace=-0.08,
+        hspace=-0.08)
     
-    # Save plot
+    # Save plot (PDF and PNG)
     plot_filename = joinpath(output_dir, "combined_comparison.pdf")
-    savefig(combined_plot, plot_filename)
-    println("    ✓ Saved: $(basename(plot_filename))")
+    savefig_both(combined_plot, plot_filename)
+    println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
     
     return combined_plot
 end

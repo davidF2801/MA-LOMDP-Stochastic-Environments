@@ -251,28 +251,30 @@ mutable struct Agent
     charging_rate::Float64            # Battery charging rate per timestep
     observation_cost::Float64         # Battery cost per observation
     reactive_policy::Any              # Reactive policy function (for policy tree planner)
+    env_ref::Any                      # Environment reference (for oracle planner online decisions)
+    oracle_obs_history::Any           # Oracle observation tracking: cell -> (count, last_time)
 end
 
 # Constructor with default observation history and plan index
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, belief::Any)
-    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing)
+    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing, nothing, nothing)
 end
 
 # Constructor with default belief, observation history, and plan index
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int)
-    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing)
+    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing, nothing, nothing)
 end
 
 # Constructor with custom battery parameters
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, 
                max_battery::Float64, charging_rate::Float64, observation_cost::Float64)
-    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing)
+    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing, nothing, nothing)
 end
 
 # Constructor with all parameters
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, belief::Any,
                max_battery::Float64, charging_rate::Float64, observation_cost::Float64)
-    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing)
+    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing, nothing, nothing)
 end
 
 # Export all types
@@ -557,19 +559,19 @@ Cell type definitions for heterogeneous RSP environments
 """
 const HETEROGENEOUS_CELL_TYPES = [
     # Immune cells – events almost never start, die immediately
-    (name="Immune", lambda=0.0002, beta0=0.0002, alpha=0.03, delta=0.05),
+    (name="Immune", lambda=0.0002, beta0=0.0004, alpha=0.08, delta=0.05),
 
     # Fleeting events – ignite occasionally, burn out fast
-    (name="Fleeting", lambda=0.0050, beta0=0.0150, alpha=0.01, delta=0.85),
+    (name="Fleeting", lambda=0.0050, beta0=0.0220, alpha=0.04, delta=0.85),
 
     # Long-lasting events – rare ignition, but ~10-step lifetime
-    (name="Long-lasting", lambda=0.0020, beta0=0.0020, alpha=0.01, delta=0.99),
+    (name="Long-lasting", lambda=0.0020, beta0=0.0035, alpha=0.04, delta=0.99),
 
     # Moderate cells – balanced ignition and lifetime ≈¼ period
-    (name="Moderate", lambda=0.0100, beta0=0.0100, alpha=0.01, delta=0.85),
+    (name="Moderate", lambda=0.0100, beta0=0.0150, alpha=0.05, delta=0.85),
 
     # High-contagion cells – ignite easily and spread, moderate lifetime
-    (name="High-contagion", lambda=0.0200, beta0=0.0100, alpha=0.1, delta=0.85)
+    (name="High-contagion", lambda=0.0200, beta0=0.0150, alpha=0.20, delta=0.85)
 ]
 
 """

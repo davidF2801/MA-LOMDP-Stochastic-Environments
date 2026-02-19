@@ -20,8 +20,8 @@ import ..Environment.EventDynamicsModule.DBNTransitionModel2, ..Environment.Even
 import ..Agents.BeliefManagement
 import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
        ..Agents.BeliefManagement.calculate_uncertainty_from_distribution, ..Agents.BeliefManagement.predict_belief_rsp,
-       ..Agents.BeliefManagement.evolve_no_obs, ..Agents.BeliefManagement.get_neighbor_beliefs,
-       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.product,
+       ..Agents.BeliefManagement.evolve_no_obs, ..Agents.BeliefManagement.evolve_no_obs_fast, ..Agents.BeliefManagement.get_neighbor_beliefs,
+       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.prob_product,
        ..Agents.BeliefManagement.normalize_belief_distributions, ..Agents.BeliefManagement.collapse_belief_to,
        ..Agents.BeliefManagement.enumerate_all_possible_outcomes, ..Agents.BeliefManagement.merge_equivalent_beliefs,
        ..Agents.BeliefManagement.calculate_cell_entropy, ..Agents.BeliefManagement.get_event_probability,
@@ -50,7 +50,8 @@ function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state
     clear_belief_evolution_cache!()
     
     # Enumerate all possible action sequences of length C considering trajectory
-    action_sequences = generate_action_sequences(agent, env, C, agent.phase_offset)
+    # Use absolute timesteps from gs_state to ensure actions are feasible at execution time
+    action_sequences = generate_action_sequences(agent, env, C, gs_state, agent.phase_offset)
 
     if isempty(action_sequences)
         end_time = time()
@@ -92,22 +93,19 @@ end
 """
 Generate all possible action sequences of length C considering agent trajectory and battery constraints
 """
-function generate_action_sequences(agent, env, C::Int, phase_offset::Int=0)
+function generate_action_sequences(agent, env, C::Int, gs_state, phase_offset::Int=0)
     if C == 0
         return Vector{SensingAction}[]
     end
     
-    # 1. Propagate agent trajectory for C timesteps
-    trajectory_positions = Vector{Tuple{Int, Int}}()
-    for t in 0:(C-1)
-        pos = get_position_at_time(agent.trajectory, t)
-        push!(trajectory_positions, pos)
-    end
-    
-    # 2. Get available actions for each timestep with battery constraints
+    # 1. Get available actions for each timestep using ABSOLUTE timesteps
+    # This ensures actions are feasible at the actual execution time
     actions_per_timestep = Vector{Vector{SensingAction}}()
     for t in 1:C
-        pos = trajectory_positions[t]
+        # Calculate absolute timestep when this action will be executed
+        global_timestep = gs_state.time_step + t - 1
+        # Get agent position at the actual execution time
+        pos = get_position_at_time(agent.trajectory, global_timestep, agent.phase_offset)
         for_cells = get_field_of_regard_at_position(agent, pos, env)
         
         # Generate actions for this timestep
@@ -269,7 +267,7 @@ function precompute_belief_branches(env, agent, gs_state)
         end
     end
     
-    # Step 2: Roll forward deterministically from prior belief to t_clean-1 using known observations
+    # Step 2: Roll forward deterministically from uniform belief to t_clean-1 using known observations
     B = initialize_uniform_belief(env)
     for t in 0:(t_clean-1)
         # Apply known observations (perfect observations)
@@ -281,7 +279,7 @@ function precompute_belief_branches(env, agent, gs_state)
                 end
             end
         end
-        B = evolve_no_obs(B, env)  # Contagion-aware update
+        B = evolve_no_obs_fast(B, env, calculate_uncertainty=false)  # Contagion-aware update
     end
 
     # Step 3: Initialize branching structure at t_clean
@@ -369,11 +367,11 @@ function precompute_belief_branches(env, agent, gs_state)
                         for (cell, observed_state) in observation_combo
                             B_new = collapse_belief_to(B_new, cell, observed_state)
                         end
-                        B_new = evolve_no_obs(B_new, env)
+                        B_new = evolve_no_obs_fast(B_new, env, calculate_uncertainty=false)
                         push!(new_branches, (B_new, p_branch * probability))
                     end
                 else
-                    B_evolved = evolve_no_obs(B_evolved, env)
+                    B_evolved = evolve_no_obs_fast(B_evolved, env, calculate_uncertainty=false)
                     push!(new_branches, (B_evolved, p_branch))
                 end
                 
@@ -465,7 +463,7 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                     for (cell, observed_state) in observation_combo
                         B_new = collapse_belief_to(B_new, cell, observed_state)
                     end
-                    B_next = evolve_no_obs(B_new, env)
+                    B_next = evolve_no_obs_fast(B_new, env, calculate_uncertainty=false)
                     push!(new_branches, (B_next, p_branch * probability))
                     if sum(p_branch for (_, p_branch) in new_branches)>1.1
                         
@@ -473,7 +471,7 @@ function calculate_macro_script_reward(seq::Vector{SensingAction}, other_scripts
                 end
             else
                 # All actions are wait actions - just evolve belief without observations
-                B_next = evolve_no_obs(B, env)
+                B_next = evolve_no_obs_fast(B, env, calculate_uncertainty=false)
                 push!(new_branches, (B_next, p_branch))
             end
         end
@@ -569,7 +567,7 @@ function evaluate_sub_sequence(seq::Vector{SensingAction}, env, agent, t_start::
         # Update belief branches for next timestep (simplified - just evolve without observations)
         new_branches = Vector{Tuple{Belief, Float64}}()
         for (B, p_branch) in B_post[t_global]
-            B_next = evolve_no_obs(B, env)
+            B_next = evolve_no_obs_fast(B, env, calculate_uncertainty=false)
             push!(new_branches, (B_next, p_branch))
         end
         B_post[t_global + 1] = merge_equivalent_beliefs(new_branches)
@@ -628,9 +626,8 @@ import ..Types.calculate_entropy_from_distribution, ..Types.calculate_cell_infor
 """
 Initialize uniform belief distribution (we knew nothing at t=0)
 """
-function initialize_uniform_belief(env)
+function initialize_uniform_belief(env; num_states::Int=2)
     # For 2-state model: [NO_EVENT, EVENT_PRESENT]
-    num_states = 2
     uniform_distribution = fill(1.0/num_states, num_states)
     
     return BeliefManagement.initialize_belief(env.width, env.height, uniform_distribution)

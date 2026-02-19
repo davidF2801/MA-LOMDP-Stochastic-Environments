@@ -176,7 +176,7 @@ create_linear_trajectory(start_x::Int, start_y::Int, end_x::Int, end_y::Int, per
 Creates a linear trajectory
 """
 function create_linear_trajectory(start_x::Int, start_y::Int, end_x::Int, end_y::Int, period::Int)
-    return LinearTrajectory(start_x, start_y, end_x, end_y, period)
+    return LinearTrajectory(start_x, start_y, end_x, end_y, period, 1.0)  # Default step_size = 1.0
 end
 
 """
@@ -254,36 +254,129 @@ end
 
 """
 execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation}, current_time::Int)
-Execute agent's current plan and return the next action to take with battery constraints
+Execute agent's current plan and return the next action to take.
 Note: Charging happens in the main simulation loop, not here
 """
 function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::Vector{GridObservation}, current_time::Int)
     agent_id = agent.id
+    # DEBUG: Always print what plan_type we have
+    if current_time % 5 == 0 || plan_type == :oracle
+        println("📋 execute_plan called: t=$(current_time), agent=$(agent_id), plan_type=$(plan_type)")
+    end
     
-    if plan === nothing && plan_type != :policy && plan_type != :pbvi_policy_tree
-        # No plan available, use default wait action
+    # ORACLE: Make decision at EVERY timestep based on current ground truth!
+    if plan_type == :oracle
+        println("🔮 ORACLE at t=$(current_time) agent $(agent_id)")
+        # Get environment reference
+        if !hasproperty(agent, :env_ref) || agent.env_ref === nothing
+            println("  ❌ ERROR: No env_ref")
+            return SensingAction(agent_id, Tuple{Int, Int}[], false)
+        end
+        env = agent.env_ref
+        
+        # Get CURRENT ground truth RIGHT NOW
+        if !hasproperty(env, :current_state) || env.current_state === nothing
+            println("  ❌ ERROR: No current_state in env")
+            return SensingAction(agent_id, Tuple{Int, Int}[], false)
+        end
+        
+        ground_truth = env.current_state
+        total_events = Base.count(==(Types.EVENT_PRESENT), ground_truth)
+        
+        # Get agent position NOW
+        pos = get_position_at_time(agent.trajectory, current_time, agent.phase_offset)
+        
+        # Get field of regard NOW
+        for_cells = get_oracle_field_of_regard(agent, pos, env)
+        # Initialize observation tracking if not exists
+        if agent.oracle_obs_history === nothing
+            agent.oracle_obs_history = Dict{Tuple{Int, Int}, Tuple{Int, Int}}()  # cell -> (count, last_time)
+        end
+        
+        # Find ALL events in FOR
+        event_cells = Tuple{Int, Int}[]
+        for cell in for_cells
+            x, y = cell
+            if ground_truth[y, x] == Types.EVENT_PRESENT
+                push!(event_cells, cell)
+            end
+        end
+        # Choose best cell using priority rule
+        chosen_cell = nothing
+        if !isempty(event_cells)
+            # Apply priority rule directly here - no function call
+            if length(event_cells) == 1
+                chosen_cell = event_cells[1]
+            else
+                # Calculate scores: (cell, obs_count, time_since_last_obs)
+                cell_scores = []
+                for cell in event_cells
+                    if haskey(agent.oracle_obs_history, cell)
+                        obs_count, last_obs_time = agent.oracle_obs_history[cell]
+                        time_since_obs = current_time - last_obs_time
+                    else
+                        obs_count = 0
+                        time_since_obs = typemax(Int)
+                    end
+                    push!(cell_scores, (cell, obs_count, time_since_obs))
+                end
+                
+                # Sort: least observed → longest since obs
+                sort!(cell_scores, by = x -> (x[2], -x[3]))
+                
+                # Find all tied cells
+                best_obs_count = cell_scores[1][2]
+                best_time_since = cell_scores[1][3]
+                tied_cells = [x[1] for x in cell_scores if x[2] == best_obs_count && x[3] == best_time_since]
+                
+                # Pick randomly from tied cells
+                chosen_cell = rand(tied_cells)
+            end
+            
+            # Update observation history
+            if haskey(agent.oracle_obs_history, chosen_cell)
+                obs_count, _ = agent.oracle_obs_history[chosen_cell]
+                agent.oracle_obs_history[chosen_cell] = (obs_count + 1, current_time)
+            else
+                agent.oracle_obs_history[chosen_cell] = (1, current_time)
+            end
+            
+            println("  🎯 Agent $(agent_id) observing event at $(chosen_cell) ($(length(event_cells)) events available)")
+        else
+            println("  ⏸️  Agent $(agent_id) waiting - no events in FOR ($(length(for_cells)) cells, $(total_events) total events)")
+        end
+        
+        # Return action
+        if chosen_cell !== nothing
+            action = SensingAction(agent_id, [chosen_cell], false)
+            # Note: Battery check removed per user request - battery doesn't matter
+            # Update battery for tracking (charging happens in main loop)
+            agent.battery_level = max(0.0, agent.battery_level - agent.observation_cost)
+            return action
+        else
+            return SensingAction(agent_id, Tuple{Int, Int}[], false)
+        end
+    end
+    
+    if plan === nothing && plan_type != :policy && plan_type != :pbvi_policy_tree && plan_type != :pomcp_online
+        # No plan available, use default wait action (pomcp_online uses reactive_policy, not plan)
         return SensingAction(agent_id, Tuple{Int, Int}[], false)
     end
-    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx || plan_type == :macro_approx_099 || plan_type == :macro_approx_095 || plan_type == :macro_approx_090 || plan_type == :prior_based || plan_type == :pbvi
-        # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, greedy sequence, macro-approximate sequence, or prior-based sequence
+    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx || plan_type == :macro_approx_099 || plan_type == :macro_approx_095 || plan_type == :macro_approx_090 || plan_type == :prior_based || plan_type == :pbvi || plan_type == :pbvi_mis || plan_type == :mpomdp_openloop || plan_type == :pomcp
+        # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, greedy sequence, macro-approximate sequence, prior-based sequence, PBVI sequence, or PBVI+MIS sequence
         if !isempty(plan)
             # Get the action at the current plan index
             if agent.plan_index <= length(plan)
                 planned_action = plan[agent.plan_index]
                 
-                # Check if the planned action is battery feasible
-                if check_battery_feasible(agent, planned_action, agent.battery_level)
-                    # Execute the planned action
-                    num_observations = length(planned_action.target_cells)
-                    # Discharge for observations (charging happens in main loop)
-                    total_cost = agent.observation_cost * num_observations
-                    agent.battery_level = max(0.0, agent.battery_level - total_cost)
-                    agent.plan_index += 1
-                    return planned_action
-                else
-                    # Not enough battery for planned action, wait
-                    return SensingAction(agent_id, Tuple{Int, Int}[], false)
-                end
+                # Note: Battery check removed per user request - battery doesn't matter
+                # Execute the planned action (planners now generate feasible actions)
+                num_observations = length(planned_action.target_cells)
+                # Discharge for observations (charging happens in main loop)
+                total_cost = agent.observation_cost * num_observations
+                agent.battery_level = max(0.0, agent.battery_level - total_cost)
+                agent.plan_index += 1
+                return planned_action
             else
                 # Plan exhausted, use wait action
                 return SensingAction(agent_id, Tuple{Int, Int}[], false)
@@ -293,8 +386,8 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
             return SensingAction(agent_id, Tuple{Int, Int}[], false)
         end
         
-    elseif plan_type == :policy || plan_type == :pbvi_policy_tree
-        # Execute reactive policy (closed-loop)
+    elseif plan_type == :policy || plan_type == :pbvi_policy_tree || plan_type == :pomcp_online
+        # Execute reactive policy (closed-loop) for other policy-based planners
         if agent.reactive_policy !== nothing
             # Use the reactive policy function directly
             # Pass the current time to the reactive policy
@@ -312,23 +405,130 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
             # No policy found, use wait action
             return SensingAction(agent_id, Tuple{Int, Int}[], false)
         else
-            # Check if the planned action is battery feasible
-            if check_battery_feasible(agent, planned_action, agent.battery_level)
-                # Execute the planned action
-                num_observations = length(planned_action.target_cells)
-                # Discharge for observations (charging happens in main loop)
-                total_cost = agent.observation_cost * num_observations
-                agent.battery_level = max(0.0, agent.battery_level - total_cost)
-                return planned_action
-            else
-                # Not enough battery for planned action, wait
-                return SensingAction(agent_id, Tuple{Int, Int}[], false)
-            end
+            # Note: Battery check removed per user request - battery doesn't matter
+            # Execute the planned action (planners now generate feasible actions)
+            num_observations = length(planned_action.target_cells)
+            # Discharge for observations (charging happens in main loop)
+            total_cost = agent.observation_cost * num_observations
+            agent.battery_level = max(0.0, agent.battery_level - total_cost)
+            return planned_action
         end
         
     else
         error("Unknown plan type: $(plan_type)")
     end
+end
+
+"""
+Select best event cell to observe based on priority rule:
+1. Least observed (lowest observation count)
+2. If tie: longest time since last observation
+3. If still tie: random uniform
+"""
+function select_best_event_cell(event_cells::Vector{Tuple{Int, Int}}, 
+                                obs_history::Dict{Tuple{Int, Int}, Tuple{Int, Int}},
+                                current_time::Int)
+    if length(event_cells) == 1
+        return event_cells[1]
+    end
+    
+    # Calculate scores for each cell: (cell, obs_count, time_since_last_obs)
+    cell_scores = []
+    for cell in event_cells
+        if haskey(obs_history, cell)
+            obs_count, last_obs_time = obs_history[cell]
+            time_since_obs = current_time - last_obs_time
+        else
+            # Never observed - highest priority
+            obs_count = 0
+            time_since_obs = typemax(Int)  # Infinite time
+        end
+        push!(cell_scores, (cell, obs_count, time_since_obs))
+    end
+    
+    # Sort by: 1) least observed (ascending), 2) longest since last obs (descending)
+    sort!(cell_scores, by = x -> (x[2], -x[3]))
+    
+    # Find all cells with same best score
+    best_obs_count = cell_scores[1][2]
+    best_time_since = cell_scores[1][3]
+    
+    tied_cells = [x[1] for x in cell_scores if x[2] == best_obs_count && x[3] == best_time_since]
+    
+    # Break tie randomly
+    return rand(tied_cells)
+end
+
+"""
+Get ground truth for oracle (helper function in trajectory planner)
+"""
+function get_oracle_ground_truth(env)
+    height, width = env.height, env.width
+    ground_truth = Matrix{Int}(undef, height, width)
+    
+    # Get current state from environment
+    if hasproperty(env, :current_state) && env.current_state !== nothing
+        for y in 1:height, x in 1:width
+            cell_state = env.current_state[y, x]
+            if cell_state == Types.NO_EVENT
+                ground_truth[y, x] = 1
+            elseif cell_state == Types.EVENT_PRESENT
+                ground_truth[y, x] = 2
+            else
+                ground_truth[y, x] = 1
+            end
+        end
+    else
+        error("Oracle Error: env.current_state is not available!")
+    end
+    
+    return ground_truth
+end
+
+"""
+Get field of regard for oracle (helper function in trajectory planner)
+"""
+function get_oracle_field_of_regard(agent, position, env)
+    x, y = position
+    fov_cells = Tuple{Int, Int}[]
+    
+    # Check sensor pattern
+    if agent.sensor.pattern == :cross
+        ax, ay = position
+        for dx in -1:1, dy in -1:1
+            nx, ny = ax + dx, ay + dy
+            if 1 <= nx <= env.width && 1 <= ny <= env.height
+                if (dx == 0 && dy == 0) || (dx == 0 && dy != 0) || (dx != 0 && dy == 0)
+                    push!(fov_cells, (nx, ny))
+                end
+            end
+        end
+    elseif agent.sensor.pattern == :circular
+        for dx in -1:1, dy in -1:1
+            nx, ny = x + dx, y + dy
+            if 1 <= nx <= env.width && 1 <= ny <= env.height
+                push!(fov_cells, (nx, ny))
+            end
+        end
+    elseif agent.sensor.pattern == :row_only || agent.sensor.range == 0.0
+        for nx in 1:env.width
+            push!(fov_cells, (nx, y))
+        end
+    else
+        sensor_range = round(Int, agent.sensor.range)
+        for dx in -sensor_range:sensor_range
+            for dy in -sensor_range:sensor_range
+                nx, ny = x + dx, y + dy
+                if 1 <= nx <= env.width && 1 <= ny <= env.height
+                    distance = sqrt(dx^2 + dy^2)
+                    if distance <= agent.sensor.range
+                        push!(fov_cells, (nx, ny))
+                    end
+                end
+            end
+        end
+    end
+    return fov_cells
 end
 
 end # module 

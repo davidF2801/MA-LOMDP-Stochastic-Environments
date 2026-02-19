@@ -28,8 +28,8 @@ function best_script_random(env, belief::Belief, agent, C::Int, other_scripts, g
     
     println("🎲 Generating random action sequence for agent $(agent.id)...")
     
-    # Generate random action sequence
-    random_sequence = generate_random_action_sequences(agent, env, C, rng)
+    # Generate random action sequence using absolute timesteps from gs_state
+    random_sequence = generate_random_action_sequences(agent, env, C, gs_state, rng)
     
     # End timing
     end_time = time()
@@ -44,23 +44,20 @@ end
 
 """
 Generate random action sequences of length C considering agent trajectory
+Uses absolute timesteps from gs_state to ensure actions are feasible at execution time
 """
-function generate_random_action_sequences(agent, env, C::Int, rng::AbstractRNG)
+function generate_random_action_sequences(agent, env, C::Int, gs_state, rng::AbstractRNG)
     if C == 0
         return SensingAction[]
     end
     
-    # 1. Propagate agent trajectory for C timesteps
-    trajectory_positions = Vector{Tuple{Int, Int}}()
-    for t in 0:(C-1)
-        pos = get_position_at_time(agent.trajectory, t)
-        push!(trajectory_positions, pos)
-    end
-    
-    # 2. Generate random actions for each timestep
+    # 1. Generate random actions for each timestep using ABSOLUTE timesteps
     random_sequence = SensingAction[]
     for t in 1:C
-        pos = trajectory_positions[t]
+        # Calculate absolute timestep when this action will be executed
+        global_timestep = gs_state.time_step + t - 1
+        # Get agent position at the actual execution time
+        pos = get_position_at_time(agent.trajectory, global_timestep, agent.phase_offset)
         for_cells = get_field_of_regard_at_position(agent, pos, env)
         
         # Generate available actions for this timestep

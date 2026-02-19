@@ -186,6 +186,7 @@ mutable struct SpatialGrid <: POMDP{GridState, SensingAction, GridObservation}
     pre_enumerated_worlds::Union{Vector{Tuple{Vector{EventMap}, Float64}}, Nothing}  # Pre-computed world trajectories
     rsp_params::Any  # Add RSP parameters (NamedTuple or nothing)
     max_prob_mass::Float64  # Maximum probability mass to keep when pruning belief branches
+    current_state::Union{Matrix{EventState}, Nothing}  # Current ground truth state for oracle planner
 end
 
 """
@@ -200,7 +201,7 @@ function SpatialGrid(width::Int, height::Int, event_dynamics::EventDynamics, age
         push!(locality_functions, locality)
     end
     
-    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing, rsp_params, max_prob_mass)
+    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing, rsp_params, max_prob_mass, nothing)
 end
 
 """
@@ -223,7 +224,7 @@ function SpatialGrid(width::Int, height::Int, agents::Vector{Agent},
     initial_events = 1
     max_sensing_targets = 1
     
-    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing, max_prob_mass)
+    return SpatialGrid(width, height, event_dynamics, agents, locality_functions, sensor_range, discount, initial_events, max_sensing_targets, ground_station_pos, Types.toy_dbn, nothing, nothing, nothing, max_prob_mass, nothing)
 end
 
 """
