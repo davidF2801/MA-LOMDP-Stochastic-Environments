@@ -23,16 +23,17 @@ using Glob
 
 # Default settings (can be overridden by command line arguments)
 DEFAULT_PLANNING_MODE = :pbvi_0_5_0_5
-DEFAULT_METRIC = :ndd_expected
+DEFAULT_METRIC = :event_observation_percentage
 
 # Multiple results directories to analyze - add as many as needed
 TARGET_RUNS = [
     #"run_2025-08-17T14-08-17-424",
-    "run_2025-08-17T14-08-17-424",
+    #"run_2025-08-17T14-08-17-424",
     #"run_2025-08-19T10-23-17-927-new",
     # Add more run directories here as needed
     # "run_2025-08-16T16-52-26-473",
-    # "run_2025-08-16T16-52-42-231",
+     #"run_2025-09-20T19-15-05-841",
+     "run_2025-09-08T09-36-38-974"
 ]
 
 # Metric definitions: true means higher is worse, false means lower is worse

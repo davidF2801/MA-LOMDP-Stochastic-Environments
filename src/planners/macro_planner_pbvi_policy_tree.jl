@@ -23,7 +23,7 @@ import ..Agents.BeliefManagement
 import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
        ..Agents.BeliefManagement.calculate_uncertainty_from_distribution, ..Agents.BeliefManagement.predict_belief_rsp,
        ..Agents.BeliefManagement.evolve_no_obs,..Agents.BeliefManagement.evolve_no_obs_fast, ..Agents.BeliefManagement.get_neighbor_beliefs,
-       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.product,
+       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.prob_product,
        ..Agents.BeliefManagement.normalize_belief_distributions, ..Agents.BeliefManagement.collapse_belief_to,
        ..Agents.BeliefManagement.enumerate_all_possible_outcomes, ..Agents.BeliefManagement.merge_equivalent_beliefs,
        ..Agents.BeliefManagement.calculate_cell_entropy, ..Agents.BeliefManagement.get_event_probability,
@@ -37,11 +37,12 @@ export best_policy_tree, create_debuggable_policy_tree, print_policy_tree_struct
 ############################
 
 # Local observation symbol for Agent i.
-# Here: :none for wait, :event / :no_event for binary sensing.
+# Here: :none for wait, :event / :no_event for binary sensing, OBS_TWO_CELL for 2-cell (one composite branch).
 @enum ObsSym::UInt8 begin
     OBS_NONE = 0
     OBS_NO_EVENT = 1
     OBS_EVENT = 2
+    OBS_TWO_CELL = 3   # 2-cell action: one branch (sample both, collapse both)
 end
 
 struct ClockVector
@@ -147,7 +148,9 @@ end
 # All possible local symbols for (agent_i, action a)
 function possible_local_symbols(agent_i::Agent, a::SensingAction)::Vector{ObsSym}
     isempty(a.target_cells) && return [OBS_NONE]
-    # noiseless binary
+    if length(a.target_cells) >= 2
+        return [OBS_TWO_CELL]  # multi-cell: one composite branch
+    end
     return [OBS_NO_EVENT, OBS_EVENT]
 end
 
@@ -247,18 +250,22 @@ function step_and_branch(
     next_clock = advance_clock_vector(clock, [agent_i; agents_j])
 
     # 5) Split on Agent i's *local* obs symbol σ (no extra sampling):
-    #    For noiseless binary sensing on one cell:
     children = Dict{ObsSym, Tuple{Float64,Belief}}()
     if isempty(a.target_cells)
-        # wait → deterministic σ=∅
         children[OBS_NONE] = (1.0, deepcopy(b_after))
+    elseif length(a.target_cells) >= 2
+        # Multi-cell: sample and collapse each; one composite branch
+        b_multi = deepcopy(b_after)
+        for cell in a.target_cells
+            state = sample_event_state_from(b_multi, cell)
+            b_multi = collapse_belief_to(b_multi, cell, state)
+        end
+        children[OBS_TWO_CELL] = (1.0, b_multi)
     else
-        cell = a.target_cells[1]  # if 1-at-a-time, adjust if multi-cell
+        cell = a.target_cells[1]
         p_event = get_event_probability(b_after, cell)
-        # σ = NO_EVENT
         b_no = collapse_belief_to(deepcopy(b_after), cell, NO_EVENT)
         children[OBS_NO_EVENT] = (1.0 - p_event, b_no)
-        # σ = EVENT
         b_yes = collapse_belief_to(deepcopy(b_after), cell, EVENT_PRESENT)
         children[OBS_EVENT] = (p_event, b_yes)
     end
@@ -294,7 +301,7 @@ function pbvi_policy_tree(
         Δ = 0.0
         for ptn in shuffle(nodes)
             # Actions feasible at this clock
-            action_set = all_pointings(agent_i, ptn.clock, env)
+            action_set = all_pointings(agent_i, ptn.clock, env; gs_state=gs_state)
 
             best_Q = -Inf
             best_act = nothing
@@ -484,7 +491,7 @@ function build_belief_set(B_clean::Belief, agent_i::Agent, τ_i::Int, agents_j::
                 par = parent_node.particles[idx]
                 
                 # Take a random action
-                action_set = all_pointings(agent_i, parent_node.clock, env)
+                action_set = all_pointings(agent_i, parent_node.clock, env; gs_state=gs_state)
                 if isempty(action_set)
                     continue
                 end
@@ -549,8 +556,9 @@ function extract_reactive_policy(POLICY::Dict{PolicyTreeNode, SensingAction},
         for obs in observation_history
             if isempty(obs.sensed_cells)
                 push!(local_hist, OBS_NONE)
+            elseif length(obs.sensed_cells) >= 2
+                push!(local_hist, OBS_TWO_CELL)
             else
-                # Assume binary sensing on first cell
                 if !isempty(obs.event_states) && obs.event_states[1] == EVENT_PRESENT
                     push!(local_hist, OBS_EVENT)
                 else
@@ -604,7 +612,7 @@ function extract_reactive_policy(POLICY::Dict{PolicyTreeNode, SensingAction},
         end
         
         # Fallback: generate a feasible action
-        feasible_actions = all_pointings(agent_i, current_clock, env)
+        feasible_actions = all_pointings(agent_i, current_clock, env; current_time=current_time)
         if !isempty(feasible_actions)
             return feasible_actions[1]
         else
@@ -718,7 +726,7 @@ function advance_clock_vector(τ_clock::ClockVector, agents)
     return ClockVector(new_phases)
 end
 
-function all_pointings(agent::Agent, τ_clock::ClockVector, env)
+function all_pointings(agent::Agent, τ_clock::ClockVector, env; gs_state=nothing, current_time=nothing)
     actions = SensingAction[]
     
     agent_index = find_agent_index(agent, env)
@@ -727,29 +735,59 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
     end
     
     phase = τ_clock.phases[agent_index]
-    pos = get_position_at_time(agent.trajectory, phase)
+    # Match execution: use (time_step+phase, phase_offset) when planning, (current_time, phase_offset) when executing
+    if current_time !== nothing
+        actual_time = current_time
+    elseif gs_state !== nothing
+        actual_time = gs_state.time_step + phase
+    else
+        actual_time = phase  # legacy fallback
+    end
+    pos = get_position_at_time(agent.trajectory, actual_time, agent.phase_offset)
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     
     push!(actions, SensingAction(agent.id, Tuple{Int, Int}[], false))
     
-    for cell in available_cells
-        action = SensingAction(agent.id, [cell], false)
-        if check_battery_feasible(agent, action, agent.battery_level)
-            push!(actions, action)
+    # Two-cell-only mode: only contiguous pairs (no single-cell) when CONTIGUOUS_PAIRS_ONLY and max_sensing_targets >= 2
+    two_cell_only = env.max_sensing_targets >= 2 && Types.CONTIGUOUS_PAIRS_ONLY[]
+    if two_cell_only && length(available_cells) > 1
+        for subset in Types.contiguous_pairs(available_cells)
+            action = SensingAction(agent.id, collect(subset), false)
+            if check_battery_feasible(agent, action, agent.battery_level)
+                push!(actions, action)
+            end
+        end
+    else
+        for cell in available_cells
+            action = SensingAction(agent.id, [cell], false)
+            if check_battery_feasible(agent, action, agent.battery_level)
+                push!(actions, action)
+            end
+        end
+        if length(available_cells) > 1 && env.max_sensing_targets >= 2
+            two_cell_subsets = Types.CONTIGUOUS_PAIRS_ONLY[] ? Types.contiguous_pairs(available_cells) : Types.combinations(available_cells, 2)
+            for subset in two_cell_subsets
+                action = SensingAction(agent.id, collect(subset), false)
+                if check_battery_feasible(agent, action, agent.battery_level)
+                    push!(actions, action)
+                end
+            end
         end
     end
     
     return actions
 end
 
-function is_action_feasible_for_phase(action::SensingAction, agent::Agent, clock::ClockVector, env)
+function is_action_feasible_for_phase(action::SensingAction, agent::Agent, clock::ClockVector, env; current_time=nothing)
     agent_index = find_agent_index(agent, env)
     if agent_index === nothing
         return false
     end
     
     phase = clock.phases[agent_index]
-    pos = get_position_at_time(agent.trajectory, phase)
+    # Clock phases at execution = mod(current_time+phase_offset), so use current_time when available
+    actual_time = current_time !== nothing ? current_time : phase
+    pos = get_position_at_time(agent.trajectory, actual_time, agent.phase_offset)
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     
     for target_cell in action.target_cells

@@ -66,16 +66,29 @@ function generate_random_action_sequences(agent, env, C::Int, gs_state, rng::Abs
         # Add wait action
         push!(available_actions, SensingAction(agent.id, Tuple{Int, Int}[], false))
         
-        # Add single-cell sensing actions
-        for cell in for_cells
-            push!(available_actions, SensingAction(agent.id, [cell], false))
-        end
-        
-        # Add multi-cell sensing actions (up to max_sensing_targets)
-        if length(for_cells) > 1 && env.max_sensing_targets > 1
-            for subset_size in 2:min(env.max_sensing_targets, length(for_cells))
-                for subset in combinations(for_cells, subset_size)
-                    push!(available_actions, SensingAction(agent.id, collect(subset), false))
+        # Two-cell-only mode: only contiguous pairs (no single-cell) when CONTIGUOUS_PAIRS_ONLY and max_sensing_targets >= 2
+        two_cell_only = env.max_sensing_targets >= 2 && Types.CONTIGUOUS_PAIRS_ONLY[]
+        if two_cell_only && length(for_cells) > 1
+            for subset in Types.contiguous_pairs(for_cells)
+                push!(available_actions, SensingAction(agent.id, collect(subset), false))
+            end
+        else
+            # Add single-cell sensing actions
+            for cell in for_cells
+                push!(available_actions, SensingAction(agent.id, [cell], false))
+            end
+            # Add multi-cell sensing actions (contiguous pairs only when CONTIGUOUS_PAIRS_ONLY)
+            if length(for_cells) > 1 && env.max_sensing_targets > 1
+                if Types.CONTIGUOUS_PAIRS_ONLY[]
+                    for subset in Types.contiguous_pairs(for_cells)
+                        push!(available_actions, SensingAction(agent.id, collect(subset), false))
+                    end
+                else
+                    for subset_size in 2:min(env.max_sensing_targets, length(for_cells))
+                        for subset in combinations(for_cells, subset_size)
+                            push!(available_actions, SensingAction(agent.id, collect(subset), false))
+                        end
+                    end
                 end
             end
         end

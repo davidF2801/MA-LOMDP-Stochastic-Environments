@@ -1,0 +1,1 @@
+Patch attempt: replace symmetric_kl(b_new, candidate.belief) with belief_distance_kl in extract_best_sequence.

@@ -20,9 +20,11 @@ import ..Agents.BeliefManagement.Belief, ..Agents.BeliefManagement.get_event_pro
        ..Agents.BeliefManagement.collapse_belief_to, ..Agents.BeliefManagement.evolve_no_obs_fast,
        ..Agents.BeliefManagement.calculate_cell_entropy,
        ..Agents.BeliefManagement.calculate_uncertainty_map_from_distributions
+# Import sophisticated belief-space reward to stay consistent with PBVI/async planners
+import ..MacroPlannerPBVI: calculate_sophisticated_reward
 
 export best_script, POMCPNode, pomcp_simulate!, pomcp_step,
-       POMCPOnlinePolicy, init_online_pomcp_policy, pomcp_select_action!, pomcp_update_root!
+       POMCPOnlinePolicy, init_online_pomcp_policy, pomcp_select_action!, pomcp_update_root!, pomcp_after_step!
 
 # State is a grid of event presence: 1 = EVENT_PRESENT, 0 = NO_EVENT
 const StateGrid = Matrix{Int}
@@ -120,8 +122,16 @@ function get_available_actions(agent::Agent, env, t::Int, gs_state)
     pos = get_position_at_time(agent.trajectory, global_timestep, agent.phase_offset)
     for_cells = get_field_of_regard_at_position(agent, pos, env)
     actions = SensingAction[SensingAction(agent.id, Tuple{Int, Int}[], false)]
-    for cell in for_cells
-        push!(actions, SensingAction(agent.id, [cell], false))
+    # Two-cell-only mode: only contiguous pairs when CONTIGUOUS_PAIRS_ONLY and max_sensing_targets >= 2
+    two_cell_only = hasproperty(env, :max_sensing_targets) && env.max_sensing_targets >= 2 && Types.CONTIGUOUS_PAIRS_ONLY[]
+    if two_cell_only && length(for_cells) > 1
+        for subset in Types.contiguous_pairs(for_cells)
+            push!(actions, SensingAction(agent.id, collect(subset), false))
+        end
+    else
+        for cell in for_cells
+            push!(actions, SensingAction(agent.id, [cell], false))
+        end
     end
     return actions
 end
@@ -155,21 +165,11 @@ function get_field_of_regard_at_position(agent, position, env)
 end
 
 """
-Simulate one step: (state, action) -> reward, next_state, observation (event states at observed cells).
+Simulate one step: (state, action) -> next_state, observation (event states at observed cells).
+Reward is handled separately using belief-space functions to stay consistent with PBVI/async.
 Observation is a list of (cell, state) for cells in action.target_cells.
 """
 function simulate_step(state::StateGrid, action::SensingAction, agent::Agent, env, rng::AbstractRNG)
-    # Reward: information-gain style (entropy * event_prob) - use true state for consistency
-    r = 0.0
-    if !isempty(action.target_cells)
-        for cell in action.target_cells
-            x, y = cell
-            event_here = state[y, x]
-            p = Float64(event_here)
-            # Use simple reward: 1 if event, 0 else (or could use entropy from belief in caller)
-            r += p
-        end
-    end
     # Observation = true state at observed cells
     obs = Tuple{Tuple{Int, Int}, Int}[]
     for cell in action.target_cells
@@ -178,7 +178,20 @@ function simulate_step(state::StateGrid, action::SensingAction, agent::Agent, en
     end
     # Next state: sample transition
     next_state = sample_next_state(state, env, rng)
-    return r, next_state, obs
+    return next_state, obs
+end
+
+"""
+Belief-space reward for an action: sum of sophisticated rewards over all sensed cells.
+This matches the reward structure used by PBVI/async planners.
+"""
+function belief_reward_for_action(belief::Belief, action::SensingAction)
+    isempty(action.target_cells) && return 0.0
+    total = 0.0
+    for cell in action.target_cells
+        total += calculate_sophisticated_reward(belief, cell)
+    end
+    return total
 end
 
 """
@@ -206,9 +219,15 @@ function rollout_from_state(state::StateGrid, agent::Agent, env, num_steps::Int,
         actions = get_available_actions(agent, env, t, gs_state)
         isempty(actions) && break
         a = rand(rng, actions)
-        r, s_next, _ = simulate_step(s, a, agent, env, rng)
+        next_state, obs = simulate_step(s, a, agent, env, rng)
+        # Simple state-based reward (event count) for this fast path
+        r = 0.0
+        for cell in a.target_cells
+            x, y = cell
+            r += Float64(s[y, x])
+        end
         total += (gamma^(d - 1)) * r
-        s = s_next
+        s = next_state
     end
     return total
 end
@@ -228,8 +247,10 @@ function rollout_from_state_with_belief_updates(state::StateGrid, agent::Agent, 
         isempty(actions) && break
         s = sample_state_from_belief(b, env, rng)
         a = rand(rng, actions)
-        r, s_next, obs = simulate_step(s, a, agent, env, rng)
-        total += (gamma^(d - 1)) * r
+        # Use belief-space reward consistent with PBVI/async planners
+        r_step = belief_reward_for_action(b, a)
+        next_state, obs = simulate_step(s, a, agent, env, rng)
+        total += (gamma^(d - 1)) * r_step
         for (cell, ost) in obs
             b = update_belief_with_obs(b, cell, ost)
         end
@@ -252,8 +273,10 @@ function rollout(belief::Belief, agent::Agent, env, depth::Int, gamma::Float64, 
         actions = get_available_actions(agent, env, t, gs_state)
         isempty(actions) && break
         a = rand(rng, actions)
-        r, state, obs = simulate_step(state, a, agent, env, rng)
-        total += (gamma^(d - 1)) * r
+        # Belief-space reward at current belief
+        r_step = belief_reward_for_action(b, a)
+        state, obs = simulate_step(state, a, agent, env, rng)
+        total += (gamma^(d - 1)) * r_step
         for (cell, ost) in obs
             b = update_belief_with_obs(b, cell, ost)
         end
@@ -311,10 +334,12 @@ function pomcp_simulate!(s::StateGrid, node::POMCPNode, depth::Int, max_depth::I
     if node.visits == 0
         # Tree leaf: expand by picking a random (untried) action, sample transition, rollout from s' with belief updates
         a = rand(rng, actions)
-        r, s_next, obs = simulate_step(s, a, agent, env, rng)
+        s_next, obs = simulate_step(s, a, agent, env, rng)
         obs_key = isempty(obs) ? () : obs_to_key(obs)
+        # Immediate reward from current belief (belief_from_state(s)) so Q-values include first step
+        r_imm = belief_reward_for_action(belief_from_state(s, env), a)
         R_rollout = rollout_from_state_with_belief_updates(s_next, agent, env, max_depth - depth - 1, gamma, gs_state, rng; start_step=step_offset + depth + 1)
-        total = r + gamma * R_rollout
+        total = r_imm + gamma * R_rollout
         # Backup
         node.visits = 1
         node.action_N[a] = 1
@@ -326,9 +351,11 @@ function pomcp_simulate!(s::StateGrid, node::POMCPNode, depth::Int, max_depth::I
 
     # UCB action selection
     a = ucb_select_action(node, actions, c_ucb)
-    r, s_next, obs = simulate_step(s, a, agent, env, rng)
+    s_next, obs = simulate_step(s, a, agent, env, rng)
     obs_key = isempty(obs) ? () : obs_to_key(obs)
     key = (a, obs_key)
+    # Immediate reward from current belief so backup is r + gamma * V(s')
+    r_imm = belief_reward_for_action(belief_from_state(s, env), a)
 
     if haskey(node.children, key)
         R_child = pomcp_simulate!(s_next, node.children[key], depth + 1, max_depth, agent, env, gs_state, gamma, c_ucb, rng; step_offset=step_offset)
@@ -337,7 +364,7 @@ function pomcp_simulate!(s::StateGrid, node::POMCPNode, depth::Int, max_depth::I
         node.children[key] = child
         R_child = rollout_from_state_with_belief_updates(s_next, agent, env, max_depth - depth - 1, gamma, gs_state, rng; start_step=step_offset + depth + 1)
     end
-    total = r + gamma * R_child
+    total = r_imm + gamma * R_child
 
     # Backup
     node.visits += 1
@@ -445,6 +472,30 @@ function pomcp_update_root!(policy::POMCPOnlinePolicy, a::SensingAction, obs_key
         policy.root = POMCPNode()
     end
     return policy
+end
+
+"""
+Convert a GridObservation (from the real environment) to ObsKey for root update.
+<<<<<<< Current (Your changes)
+=======
+Order matches observation.event_states (same order as observation.sensed_cells).
+>>>>>>> Incoming (Background Agent changes)
+"""
+function observation_to_obs_key(observation)
+    isempty(observation.event_states) && return ()
+    return tuple((ost == EVENT_PRESENT ? 1 : 0 for ost in observation.event_states)...)
+end
+
+"""
+Call after the agent executes `action` and receives `observation`.
+If the agent has an online POMCP policy, shifts the tree root to the (a,o) child.
+Call this from the main loop after each env step for POMCP agents.
+"""
+function pomcp_after_step!(agent, action::SensingAction, observation)
+    if hasproperty(agent, :pomcp_policy) && agent.pomcp_policy !== nothing
+        obs_key = observation_to_obs_key(observation)
+        pomcp_update_root!(agent.pomcp_policy, action, obs_key)
+    end
 end
 
 """

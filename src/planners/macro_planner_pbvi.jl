@@ -24,14 +24,45 @@ import ..Agents.BeliefManagement
 import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
        ..Agents.BeliefManagement.calculate_uncertainty_from_distribution, ..Agents.BeliefManagement.predict_belief_rsp,
        ..Agents.BeliefManagement.evolve_no_obs,..Agents.BeliefManagement.evolve_no_obs_fast, ..Agents.BeliefManagement.get_neighbor_beliefs,
-       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.product,
+       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.prob_product,
        ..Agents.BeliefManagement.normalize_belief_distributions, ..Agents.BeliefManagement.collapse_belief_to,
        ..Agents.BeliefManagement.enumerate_all_possible_outcomes, ..Agents.BeliefManagement.merge_equivalent_beliefs,
        ..Agents.BeliefManagement.calculate_cell_entropy, ..Agents.BeliefManagement.get_event_probability,
        ..Agents.BeliefManagement.clear_belief_evolution_cache!, ..Agents.BeliefManagement.get_cache_stats,
        ..Agents.BeliefManagement.beliefs_are_equivalent
 
-export best_script, calculate_macro_script_reward, calculate_sophisticated_reward, configure_reward_weights, set_reward_config_from_main, get_belief_cache_stats, get_timing_stats, get_detailed_timing_analysis, analyze_cache_efficiency, test_kl_performance, test_blas_performance
+export best_script, calculate_macro_script_reward, calculate_sophisticated_reward,
+       configure_reward_weights, set_reward_config_from_main,
+       set_hyperparams_from_main, get_hyperparams,
+       get_belief_cache_stats, get_timing_stats, get_detailed_timing_analysis,
+       analyze_cache_efficiency, test_kl_performance, test_blas_performance,
+       sample_system_state_at_τi, simulate_one_step
+
+# PBVI hyperparameter configuration (overridable from main scripts)
+struct PBVIHyperparams
+    N_seed::Int
+    N_particles::Int
+    N_sweeps::Int
+end
+
+const PBVI_HYPERPARAMS = Ref(PBVIHyperparams(30, 64, 50))
+
+"""
+set_hyperparams_from_main(N_seed, N_particles, N_sweeps)
+
+Configure PBVI’s rollout budget from experiment scripts (e.g. scripts/main*.jl),
+so different problems can use different budgets without touching the planner.
+"""
+function set_hyperparams_from_main(N_seed::Int, N_particles::Int, N_sweeps::Int)
+    PBVI_HYPERPARAMS[] = PBVIHyperparams(N_seed, N_particles, N_sweeps)
+end
+
+"""
+get_hyperparams()
+
+Return the current PBVI hyperparameters (N_seed, N_particles, N_sweeps).
+"""
+get_hyperparams() = PBVI_HYPERPARAMS[]
 
 # PBVI-specific types
 struct ClockVector
@@ -354,7 +385,7 @@ best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state):
   – Return the best sequence
 """
 function best_script(env, belief::Belief, agent, C::Int, other_scripts, gs_state; rng::AbstractRNG=Random.GLOBAL_RNG, 
-                    N_seed::Int=30, N_particles::Int=32, N_sweeps::Int=50, ε::Float64=0.1)
+                    N_seed::Int=30, N_particles::Int=64, N_sweeps::Int=50, ε::Float64=0.1)
     # Start timing
     start_time = time()
     
@@ -494,10 +525,12 @@ function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::Sensi
     
     # Sample outcomes actually happening this step
     sampling_start = time()
-    state_i = nothing
+    # Sample and collapse for each cell in the action (supports single- and multi-cell)
     if !isempty(action_i.target_cells)
-        cell_i = action_i.target_cells[1]  # Assume single cell for now
-        state_i = sample_event_state_from(b_sys, cell_i)
+        for cell in action_i.target_cells
+            state_i = sample_event_state_from(b_sys, cell)
+            b_sys = collapse_belief_to(b_sys, cell, state_i)
+        end
     end
     # Sample other agents' observations and apply them immediately
     for j in agents_j
@@ -509,10 +542,6 @@ function simulate_one_step(τ_clock::ClockVector, b_sys::Belief, action_i::Sensi
                 b_sys = collapse_belief_to(b_sys, cell_j, state_j)
             end
         end
-    end
-    # Collapse belief based on current agent's action
-    if state_i !== nothing && !isempty(action_i.target_cells)
-        b_sys = collapse_belief_to(b_sys, action_i.target_cells[1], state_i)
     end
     timing_breakdown[:sampling_and_collapse] = time() - sampling_start
     
@@ -549,7 +578,7 @@ function build_belief_set(B_clean::Belief, agent_i::Agent, τ_i::Int, agents_j::
             push!(𝔅, BeliefPoint(τ, deepcopy(b_sys)))
             
             # Take a random action and simulate
-            a_rand = random_pointing(agent_i, τ, env)
+            a_rand = random_pointing(agent_i, τ, env, gs_state)
             (_, τ, b_sys, _, _) = simulate_one_step(τ, b_sys, a_rand, agent_i, agents_j, env, gs_state)
         end
     end
@@ -622,7 +651,7 @@ for bp in shuffled_𝔅
   
   # Get all feasible actions with timing
   action_start = time()
-  action_set = all_pointings(agent_i, bp.clock, env)
+  action_set = all_pointings(agent_i, bp.clock, env, gs_state)
   action_time = time() - action_start
   timing_stats[:total_action_set_gen] += action_time
   operation_counts[:action_set_gen_calls] += 1
@@ -695,105 +724,104 @@ println("• Belief copying: $(round(timing_stats[:total_belief_copy] * 1000, di
 
 return VALUE, POLICY, Q_VALUES  # Return Q-values too
 end
-"""
-Open-loop plan extraction using empirical distribution μ_τ(h)
-Implements: a_h^* = arg max_{a ∈ A_i} E_{b ~ μ_τ(h)} [Q̂((τ^(h), b), a)]
-"""
-function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::Dict{BeliefPoint, Float64}, 
-                             Q_VALUES::Dict{BeliefPoint, Dict{SensingAction, Float64}},
-                             𝔅::Vector{BeliefPoint}, agent_i::Agent, env, gs_state, H::Int)
-    sequence = SensingAction[]
+# """
+# Open-loop plan extraction using empirical distribution μ_τ(h)
+# Implements: a_h^* = arg max_{a ∈ A_i} E_{b ~ μ_τ(h)} [Q̂((τ^(h), b), a)]
+# """
+# function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction}, VALUE::Dict{BeliefPoint, Float64}, 
+#                              Q_VALUES::Dict{BeliefPoint, Dict{SensingAction, Float64}},
+#                              𝔅::Vector{BeliefPoint}, agent_i::Agent, env, gs_state, H::Int)
+#     sequence = SensingAction[]
     
-    # Calculate initial clock phases relative to agent_i (which is at phase 0)
-    all_agents = [env.agents[j] for j in sort(collect(keys(env.agents)))]
-    agent_i_index = find_agent_index(agent_i, env)
+#     # Calculate initial clock phases relative to agent_i (which is at phase 0)
+#     all_agents = [env.agents[j] for j in sort(collect(keys(env.agents)))]
+#     agent_i_index = find_agent_index(agent_i, env)
     
-    println("🔄 Implementing open-loop plan extraction using empirical distribution μ_τ(h)")
+#     println("🔄 Implementing open-loop plan extraction using empirical distribution μ_τ(h)")
     
-    # For each time step h in the horizon
-    for h in 0:(H-1)
-        # Calculate clock phases for time step h
-        τ_h_phases = Int[]
-        for (i, agent) in enumerate(all_agents)
-            if i == agent_i_index
-                # Agent_i is at phase h
-                push!(τ_h_phases, h % agent.trajectory.period)
-            else
-                # Other agents: relative phase offset + h
-                relative_offset = mod((agent.phase_offset - agent_i.phase_offset), agent.trajectory.period)
-                phase_h = mod(relative_offset + h, agent.trajectory.period)
-                push!(τ_h_phases, phase_h)
-            end
-        end
-        τ_h = ClockVector(τ_h_phases)
+#     # For each time step h in the horizon
+#     for h in 0:(H-1)
+#         # Calculate clock phases for time step h
+#         τ_h_phases = Int[]
+#         for (i, agent) in enumerate(all_agents)
+#             if i == agent_i_index
+#                 # Agent_i is at phase h
+#                 push!(τ_h_phases, h % agent.trajectory.period)
+#             else
+#                 # Other agents: relative phase offset + h
+#                 relative_offset = mod((agent.phase_offset - agent_i.phase_offset), agent.trajectory.period)
+#                 phase_h = mod(relative_offset + h, agent.trajectory.period)
+#                 push!(τ_h_phases, phase_h)
+#             end
+#         end
+#         τ_h = ClockVector(τ_h_phases)
         
-        # Find all belief points that match this clock tuple - this is μ_τ(h)
-        beliefs_at_τ_h = BeliefPoint[]
-        for bp in 𝔅
-            if bp.clock.phases == τ_h.phases
-                push!(beliefs_at_τ_h, bp)
-            end
-        end
+#         # Find all belief points that match this clock tuple - this is μ_τ(h)
+#         beliefs_at_τ_h = BeliefPoint[]
+#         for bp in 𝔅
+#             if bp.clock.phases == τ_h.phases
+#                 push!(beliefs_at_τ_h, bp)
+#             end
+#         end
         
-        if isempty(beliefs_at_τ_h)
-            println("⚠️  No beliefs found for time step $h, using wait action")
-            push!(sequence, SensingAction(agent_i.id, Tuple{Int, Int}[], false))
-            continue
-        end
+#         if isempty(beliefs_at_τ_h)
+#             println("⚠️  No beliefs found for time step $h, using wait action")
+#             push!(sequence, SensingAction(agent_i.id, Tuple{Int, Int}[], false))
+#             continue
+#         end
         
-        # Calculate empirical distribution μ_τ(h): uniform over all beliefs in this clock tuple
-        # Each belief has probability 1/|beliefs_at_τ_h|
-        belief_probability = 1.0 / length(beliefs_at_τ_h)
+#         # Calculate empirical distribution μ_τ(h): uniform over all beliefs in this clock tuple
+#         # Each belief has probability 1/|beliefs_at_τ_h|
+#         belief_probability = 1.0 / length(beliefs_at_τ_h)
         
-        # Get all possible actions at this time step
-        # Use the first belief point to determine available actions (should be same for all with same clock)
-        available_actions = all_pointings(agent_i, τ_h, env)
+#         # Get all possible actions at this time step
+#         # Use the first belief point to determine available actions (should be same for all with same clock)
+#         available_actions = all_pointings(agent_i, τ_h, env)
         
-        # Calculate expected Q-value for each action: E_{b ~ μ_τ(h)} [Q̂((τ^(h), b), a)]
-        best_expected_q = -Inf
-        best_action = nothing
+#         # Calculate expected Q-value for each action: E_{b ~ μ_τ(h)} [Q̂((τ^(h), b), a)]
+#         best_expected_q = -Inf
+#         best_action = nothing
         
-        println("  Step $h: evaluating $(length(available_actions)) actions over $(length(beliefs_at_τ_h)) beliefs")
+#         println("  Step $h: evaluating $(length(available_actions)) actions over $(length(beliefs_at_τ_h)) beliefs")
         
-        for a in available_actions
-            expected_q = 0.0
+#         for a in available_actions
+#             expected_q = 0.0
             
-            # Sum over all beliefs in the empirical distribution
-            for bp in beliefs_at_τ_h
-                if haskey(Q_VALUES, bp) && haskey(Q_VALUES[bp], a)
-                    q_value = Q_VALUES[bp][a]
-                    expected_q += belief_probability * q_value
-                else
-                    # If Q-value not available, use 0 (or could use VALUE[bp] as fallback)
-                    expected_q += belief_probability * 0.0
-                end
-            end
+#             # Sum over all beliefs in the empirical distribution
+#             for bp in beliefs_at_τ_h
+#                 if haskey(Q_VALUES, bp) && haskey(Q_VALUES[bp], a)
+#                     q_value = Q_VALUES[bp][a]
+#                     expected_q += belief_probability * q_value
+#                 else
+#                     # If Q-value not available, use 0 (or could use VALUE[bp] as fallback)
+#                     expected_q += belief_probability * 0.0
+#                 end
+#             end
             
-            # Select action with highest expected Q-value
-            if expected_q > best_expected_q
-                best_expected_q = expected_q
-                best_action = a
-            end
-        end
+#             # Select action with highest expected Q-value
+#             if expected_q > best_expected_q
+#                 best_expected_q = expected_q
+#                 best_action = a
+#             end
+#         end
         
-        # Add the optimal action for this time step to the sequence
-        if best_action !== nothing
-            push!(sequence, best_action)
-            println("  Step $h: selected action with expected Q-value $(round(best_expected_q, digits=4))")
-        else
-            # Fallback to wait action
-            push!(sequence, SensingAction(agent_i.id, Tuple{Int, Int}[], false))
-            println("  Step $h: fallback to wait action")
-        end
-    end
+#         # Add the optimal action for this time step to the sequence
+#         if best_action !== nothing
+#             push!(sequence, best_action)
+#             println("  Step $h: selected action with expected Q-value $(round(best_expected_q, digits=4))")
+#         else
+#             # Fallback to wait action
+#             push!(sequence, SensingAction(agent_i.id, Tuple{Int, Int}[], false))
+#             println("  Step $h: fallback to wait action")
+#         end
+#     end
     
-    println("✅ Open-loop sequence extracted with $(length(sequence)) actions")
-    return sequence
-end
-# function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction},
-#     VALUE::Dict{BeliefPoint, Float64},
-#     𝔅::Vector{BeliefPoint},
-#     agent_i::Agent, env, gs_state, H::Int)
+#     println("✅ Open-loop sequence extracted with $(length(sequence)) actions")
+#     return sequence
+# end
+# function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction},VALUE::Dict{BeliefPoint, Float64},
+#     Q_VALUES::Dict{BeliefPoint, Dict{SensingAction, Float64}},
+#     𝔅::Vector{BeliefPoint},agent_i::Agent, env, gs_state, H::Int)
 
 #     sequence = SensingAction[]
 
@@ -851,7 +879,118 @@ end
 #     return sequence
 # end
 
+function extract_best_sequence(POLICY::Dict{BeliefPoint, SensingAction},
+    VALUE::Dict{BeliefPoint, Float64},
+    Q_VALUES::Dict{BeliefPoint, Dict{SensingAction, Float64}},
+    𝔅::Vector{BeliefPoint}, agent_i::Agent, env, gs_state, H::Int)
 
+    sequence = SensingAction[]
+
+    # Compute current clock phases relative to agent_i
+    all_agents = [env.agents[j] for j in sort(collect(keys(env.agents)))]
+    agents_j = [env.agents[j] for j in keys(env.agents) if j != agent_i.id]
+    agent_i_index = find_agent_index(agent_i, env)
+    current_phases = [i == agent_i_index ? 0 :
+                      mod((agent.phase_offset - agent_i.phase_offset), agent.trajectory.period)
+                      for (i, agent) in enumerate(all_agents)]
+
+    # Start with all beliefs at step 0
+    τ_0 = ClockVector([mod((current_phases[i]), all_agents[i].trajectory.period)
+                        for i in 1:length(all_agents)])
+    current_beliefs = [bp for bp in 𝔅 if bp.clock.phases == τ_0.phases]
+
+    for h in 0:(H-1)
+        if isempty(current_beliefs)
+            push!(sequence, SensingAction(agent_i.id, Tuple{Int,Int}[], false))
+            # Advance clock for next step
+            τ_next = ClockVector([mod((current_phases[i] + h + 1), all_agents[i].trajectory.period)
+                                  for i in 1:length(all_agents)])
+            current_beliefs = [bp for bp in 𝔅 if bp.clock.phases == τ_next.phases]
+            continue
+        end
+
+        # Collect all actions available at this clock
+        all_actions = Set{SensingAction}()
+        for bp in current_beliefs
+            if haskey(Q_VALUES, bp)
+                for act in keys(Q_VALUES[bp])
+                    push!(all_actions, act)
+                end
+            end
+        end
+
+        if isempty(all_actions)
+            push!(sequence, SensingAction(agent_i.id, Tuple{Int,Int}[], false))
+            τ_next = ClockVector([mod((current_phases[i] + h + 1), all_agents[i].trajectory.period)
+                                  for i in 1:length(all_agents)])
+            current_beliefs = [bp for bp in 𝔅 if bp.clock.phases == τ_next.phases]
+            continue
+        end
+
+        # Pick best action: average Q-value over all current beliefs
+        best_action = nothing
+        best_expected_q = -Inf
+        n_beliefs = length(current_beliefs)
+
+        for a in all_actions
+            expected_q = 0.0
+            for bp in current_beliefs
+                if haskey(Q_VALUES, bp) && haskey(Q_VALUES[bp], a)
+                    expected_q += Q_VALUES[bp][a]
+                else
+                    expected_q += 0.0
+                end
+            end
+            expected_q /= n_beliefs
+
+            if expected_q > best_expected_q
+                best_expected_q = expected_q
+                best_action = a
+            end
+        end
+
+        push!(sequence, best_action)
+
+        # === KEY DIFFERENCE: simulate all beliefs forward under best_action ===
+        # For each current belief, simulate one step with the chosen action
+        # and match to nearest belief in 𝔅 at the next clock
+        τ_next = ClockVector([mod((current_phases[i] + h + 1), all_agents[i].trajectory.period)
+                              for i in 1:length(all_agents)])
+        next_clock_beliefs = [bp for bp in 𝔅 if bp.clock.phases == τ_next.phases]
+
+        if isempty(next_clock_beliefs)
+            current_beliefs = []
+            continue
+        end
+
+        # Simulate each current belief forward and find its nearest neighbor
+        # at the next clock step
+        next_beliefs = BeliefPoint[]
+        for bp in current_beliefs
+            # Simulate one step: evolve dynamics, apply best_action, sample observation
+            _, τ_new, b_new, _, _ = simulate_one_step(bp.clock, bp.belief, best_action, agent_i, agents_j, env, gs_state)
+
+            # Match to nearest belief in 𝔅 at next clock
+            best_match = nothing
+            best_dist = Inf
+            for candidate in next_clock_beliefs
+                d = belief_distance_kl(b_new, candidate.belief)
+                if d < best_dist
+                    best_dist = d
+                    best_match = candidate
+                end
+            end
+
+            if best_match !== nothing && !(best_match in next_beliefs)
+                push!(next_beliefs, best_match)
+            end
+        end
+
+        current_beliefs = isempty(next_beliefs) ? next_clock_beliefs : next_beliefs
+    end
+
+    return sequence
+end
 
 
 # Helper functions
@@ -945,16 +1084,16 @@ end
 """
 Generate random pointing action
 """
-function random_pointing(agent::Agent, τ_clock::ClockVector, env)
+function random_pointing(agent::Agent, τ_clock::ClockVector, env, gs_state)
     # Get agent position at this time using agent's phase
+    # PBVI phase p = steps since sync; position must match execution: (time_step + phase, phase_offset)
     agent_index = find_agent_index(agent, env)
     if agent_index === nothing
         return SensingAction(agent.id, Tuple{Int, Int}[], false)
     end
     phase = τ_clock.phases[agent_index]
-    
-    # Get position - should work for all trajectory types with just phase
-    pos = get_position_at_time(agent.trajectory, phase)
+    actual_time = gs_state.time_step + phase
+    pos = get_position_at_time(agent.trajectory, actual_time, agent.phase_offset)
     
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
@@ -980,18 +1119,18 @@ end
 """
 Get all pointing actions for agent
 """
-function all_pointings(agent::Agent, τ_clock::ClockVector, env)
+function all_pointings(agent::Agent, τ_clock::ClockVector, env, gs_state)
     actions = SensingAction[]
     
     # Get agent position at this time using agent's phase
+    # PBVI phase p = steps since sync; position must match execution: (time_step + phase, phase_offset)
     agent_index = find_agent_index(agent, env)
     if agent_index === nothing
         return [SensingAction(agent.id, Tuple{Int, Int}[], false)]
     end
     phase = τ_clock.phases[agent_index]
-    
-    # Get position - should work for all trajectory types with just phase
-    pos = get_position_at_time(agent.trajectory, phase)
+    actual_time = gs_state.time_step + phase
+    pos = get_position_at_time(agent.trajectory, actual_time, agent.phase_offset)
     
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
@@ -1001,11 +1140,31 @@ function all_pointings(agent::Agent, τ_clock::ClockVector, env)
     # Add wait action
     push!(actions, SensingAction(agent.id, Tuple{Int, Int}[], false))
     
-    # Add single cell actions
-    for cell in available_cells
-        action = SensingAction(agent.id, [cell], false)
-        if check_battery_feasible(agent, action, agent.battery_level)
-            push!(actions, action)
+    # Two-cell-only mode: only contiguous pairs (no single-cell) when CONTIGUOUS_PAIRS_ONLY and max_sensing_targets >= 2
+    two_cell_only = env.max_sensing_targets >= 2 && Types.CONTIGUOUS_PAIRS_ONLY[]
+    if two_cell_only && length(available_cells) > 1
+        for subset in Types.contiguous_pairs(available_cells)
+            action = SensingAction(agent.id, collect(subset), false)
+            if check_battery_feasible(agent, action, agent.battery_level)
+                push!(actions, action)
+            end
+        end
+    else
+        # Add single cell actions
+        for cell in available_cells
+            action = SensingAction(agent.id, [cell], false)
+            if check_battery_feasible(agent, action, agent.battery_level)
+                push!(actions, action)
+            end
+        end
+        # Add two-cell contiguous actions when max_sensing_targets >= 2 but not two-cell-only
+        if env.max_sensing_targets >= 2 && length(available_cells) > 1
+            for subset in Types.contiguous_pairs(available_cells)
+                action = SensingAction(agent.id, collect(subset), false)
+                if check_battery_feasible(agent, action, agent.battery_level)
+                    push!(actions, action)
+                end
+            end
         end
     end
     
@@ -1198,10 +1357,11 @@ end
 
 # Reward function configuration - these will be set from main.jl
 # Default values if not set externally
-const DEFAULT_ENTROPY_WEIGHT = get(ENV, "ENTROPY_WEIGHT", 1.0)    # w_H: Weight for entropy reduction (coordination)
-const DEFAULT_VALUE_WEIGHT = get(ENV, "VALUE_WEIGHT", 0.5)        # w_F: Weight for state value (detection priority)
-const DEFAULT_INFORMATION_STATES = get(ENV, "INFORMATION_STATES", [1, 2])  # I_1: No event, I_2: Event
-const DEFAULT_STATE_VALUES = get(ENV, "STATE_VALUES", [0.1, 1.0])        # F_1: No event value, F_2: Event value
+# Note: Not const so they can be reassigned by set_reward_config_from_main()
+DEFAULT_ENTROPY_WEIGHT = get(ENV, "ENTROPY_WEIGHT", 1.0)    # w_H: Weight for entropy reduction (coordination)
+DEFAULT_VALUE_WEIGHT = get(ENV, "VALUE_WEIGHT", 0.5)        # w_F: Weight for state value (detection priority)
+DEFAULT_INFORMATION_STATES = get(ENV, "INFORMATION_STATES", [1, 2])  # I_1: No event, I_2: Event
+DEFAULT_STATE_VALUES = get(ENV, "STATE_VALUES", [0.1, 1.0])        # F_1: No event value, F_2: Event value
 
 """
 Calculate sophisticated reward for sensing actions
@@ -1213,26 +1373,26 @@ Where:
 - w_F: Weight for state value (detection priority)
 - E[F_I_j]: Expected value of information state I_k under current belief
 
-Uses global configuration constants from main.jl
+Pass explicit `w_H`, `w_F`, and `state_values` (e.g. from each main script's constants) so logging matches the
+file header even when planners use different globals (e.g. `pbvi_*` sweeps via `set_reward_config_from_main`).
 """
-function calculate_sophisticated_reward(belief::Belief, cell::Tuple{Int, Int})
-    
-    # 1. Entropy-based reward: w_H * (H_prior - H_post)
+function calculate_sophisticated_reward(belief::Belief, cell::Tuple{Int, Int},
+        w_H::Float64, w_F::Float64, state_values::Vector{Float64})
     H_before = calculate_cell_entropy(belief, cell)
     H_after = 0.0  # Simplified: assume perfect observation
-    entropy_reward = DEFAULT_ENTROPY_WEIGHT * (H_before - H_after)
-    
-    # 2. State value reward: w_F * E[F_I_j]
-    # Calculate expected value under current belief
+    entropy_reward = w_H * (H_before - H_after)
     event_prob = get_event_probability(belief, cell)
     no_event_prob = 1.0 - event_prob
-    
-    # E[F_I_j] = Σ_k p(I_k) * F_k
-    expected_value = no_event_prob * DEFAULT_STATE_VALUES[1] + event_prob * DEFAULT_STATE_VALUES[2]
-    value_reward = DEFAULT_VALUE_WEIGHT * expected_value
-    
-    # Total reward for this cell
+    expected_value = no_event_prob * state_values[1] + event_prob * state_values[2]
+    value_reward = w_F * expected_value
     return entropy_reward + value_reward
+end
+
+"""
+Same formula as the 5-argument method, using module globals set by `set_reward_config_from_main` (planner objective).
+"""
+function calculate_sophisticated_reward(belief::Belief, cell::Tuple{Int, Int})
+    return calculate_sophisticated_reward(belief, cell, DEFAULT_ENTROPY_WEIGHT, DEFAULT_VALUE_WEIGHT, DEFAULT_STATE_VALUES)
 end
 
 """

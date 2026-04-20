@@ -1,0 +1,1584 @@
+ORACLE CALLED: t=0 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=1 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=2 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=2 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=3 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=3 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=4 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=4 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=5 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=5 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=6 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=6 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=7 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=7 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=8 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=8 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=9 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=9 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=10 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=10 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=11 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=11 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=12 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=12 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=13 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=13 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=14 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=14 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=15 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=15 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=16 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=16 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=17 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=17 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=18 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=18 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=19 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=19 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=20 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=20 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=21 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=21 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=22 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=22 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=23 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=23 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=24 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=24 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=25 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=25 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=26 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=26 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=27 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=27 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=28 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=28 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=29 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=29 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=30 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=30 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=31 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=31 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=32 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=32 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=33 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=33 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=34 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=34 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=35 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=35 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=36 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=36 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=37 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=37 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=38 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=38 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=39 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=39 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=40 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=40 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=41 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=41 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=42 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=42 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=43 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=43 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=44 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=44 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=45 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=45 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=46 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=46 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=47 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=47 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=48 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=48 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=49 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=49 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=50 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=50 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=51 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=51 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=52 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=52 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=53 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=53 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=54 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=54 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=55 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=55 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=56 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=56 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=57 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=57 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=58 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=58 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=59 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=59 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=60 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=60 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=61 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=61 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=62 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=62 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=63 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=63 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=64 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=64 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=65 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=65 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=66 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=66 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=67 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=67 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=68 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=68 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=69 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=69 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=70 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=70 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=71 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=71 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=72 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=72 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=73 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=73 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=74 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=74 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=75 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=75 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=76 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=76 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=77 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=77 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=78 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=78 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=79 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=79 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=80 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=80 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=81 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=81 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=82 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=82 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=83 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=83 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=84 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=84 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=85 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=85 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=86 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=86 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=87 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=87 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=88 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=88 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=89 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=89 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=90 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=90 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=91 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=91 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=92 agent=1
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=92 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=93 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=93 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=94 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=94 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=95 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=95 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=96 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=96 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=97 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=97 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=98 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=98 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=99 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=99 agent=2
+  OBSERVING event at (1, 3)
+ORACLE CALLED: t=0 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=1 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=2 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=2 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=3 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=3 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=4 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=4 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=5 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=5 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=6 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=6 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=7 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=7 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=8 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=8 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=9 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=9 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=10 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=10 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=11 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=11 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=12 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=12 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=13 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=13 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=14 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=14 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=15 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=15 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=16 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=16 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=17 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=17 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=18 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=18 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=19 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=19 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=20 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=20 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=21 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=21 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=22 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=22 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=23 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=23 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=24 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=24 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=25 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=25 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=26 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=26 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=27 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=27 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=28 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=28 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=29 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=29 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=30 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=30 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=31 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=31 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=32 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=32 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=33 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=33 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=34 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=34 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=35 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=35 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=36 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=36 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=37 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=37 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=38 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=38 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=39 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=39 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=40 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=40 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=41 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=41 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=42 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=42 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=43 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=43 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=44 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=44 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=45 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=45 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=46 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=46 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=47 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=47 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=48 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=48 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=49 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=49 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=50 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=50 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=51 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=51 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=52 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=52 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=53 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=53 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=54 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=54 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=55 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=55 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=56 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=56 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=57 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=57 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=58 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=58 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=59 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=59 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=60 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=60 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=61 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=61 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=62 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=62 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=63 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=63 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=64 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=64 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=65 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=65 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=66 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=66 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=67 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=67 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=68 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=68 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=69 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=69 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=70 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=70 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=71 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=71 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=72 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=72 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=73 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=73 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=74 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=74 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=75 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=75 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=76 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=76 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=77 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=77 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=78 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=78 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=79 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=79 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=80 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=80 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=81 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=81 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=82 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=82 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=83 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=83 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=84 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=84 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=85 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=85 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=86 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=86 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=87 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=87 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=88 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=88 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=89 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=89 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=90 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=90 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=91 agent=1
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=91 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=92 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=92 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=93 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=93 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=94 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=94 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=95 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=95 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=96 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=96 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=97 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=97 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=98 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=98 agent=2
+  OBSERVING event at (2, 1)
+ORACLE CALLED: t=99 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=99 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=0 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=1 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=2 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=2 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=3 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=3 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=4 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=4 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=5 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=5 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=6 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=6 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=7 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=7 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=8 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=8 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=9 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=9 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=10 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=10 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=11 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=11 agent=2
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=12 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=12 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=13 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=13 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=14 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=14 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=15 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=15 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=16 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=16 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=17 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=17 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=18 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=18 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=19 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=19 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=20 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=20 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=21 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=21 agent=2
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=22 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=22 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=23 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=23 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=24 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=24 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=25 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=25 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=26 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=26 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=27 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=27 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=28 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=28 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=29 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=29 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=30 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=30 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=31 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=31 agent=2
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=32 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=32 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=33 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=33 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=34 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=34 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=35 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=35 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=36 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=36 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=37 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=37 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=38 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=38 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=39 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=39 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=40 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=40 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=41 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=41 agent=2
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=42 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=42 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=43 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=43 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=44 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=44 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=45 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=45 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=46 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=46 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=47 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=47 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=48 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=48 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=49 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=49 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=50 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=50 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=51 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=51 agent=2
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=52 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=52 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=53 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=53 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=54 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=54 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=55 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=55 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=56 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=56 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=57 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=57 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=58 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=58 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=59 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=59 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=60 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=60 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=61 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=61 agent=2
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=62 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=62 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=63 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=63 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=64 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=64 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=65 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=65 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=66 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=66 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=67 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=67 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=68 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=68 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=69 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=69 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=70 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=70 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=71 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=71 agent=2
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=72 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=72 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=73 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=73 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=74 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=74 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=75 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=75 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=76 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=76 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=77 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=77 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=78 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=78 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=79 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=79 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=80 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=80 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=81 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=81 agent=2
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=82 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=82 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=83 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=83 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=84 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=84 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=85 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=85 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=86 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=86 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=87 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=87 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=88 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=88 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=89 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=89 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=90 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=90 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=91 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=91 agent=2
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=92 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=92 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=93 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=93 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=94 agent=1
+  OBSERVING event at (1, 5)
+ORACLE CALLED: t=94 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=95 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=95 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=96 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=96 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=97 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=97 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=98 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=98 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=99 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=99 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=0 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=1 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=2 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=2 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=3 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=3 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=4 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=4 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=5 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=5 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=6 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=6 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=7 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=7 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=8 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=8 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=9 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=9 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=10 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=10 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=11 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=11 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=12 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=12 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=13 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=13 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=14 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=14 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=15 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=15 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=16 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=16 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=17 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=17 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=18 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=18 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=19 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=19 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=20 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=20 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=21 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=21 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=22 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=22 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=23 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=23 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=24 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=24 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=25 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=25 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=26 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=26 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=27 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=27 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=28 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=28 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=29 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=29 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=30 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=30 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=31 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=31 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=32 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=32 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=33 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=33 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=34 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=34 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=35 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=35 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=36 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=36 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=37 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=37 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=38 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=38 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=39 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=39 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=40 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=40 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=41 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=41 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=42 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=42 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=43 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=43 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=44 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=44 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=45 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=45 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=46 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=46 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=47 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=47 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=48 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=48 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=49 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=49 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=50 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=50 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=51 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=51 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=52 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=52 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=53 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=53 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=54 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=54 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=55 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=55 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=56 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=56 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=57 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=57 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=58 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=58 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=59 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=59 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=60 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=60 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=61 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=61 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=62 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=62 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=63 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=63 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=64 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=64 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=65 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=65 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=66 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=66 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=67 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=67 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=68 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=68 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=69 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=69 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=70 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=70 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=71 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=71 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=72 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=72 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=73 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=73 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=74 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=74 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=75 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=75 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=76 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=76 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=77 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=77 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=78 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=78 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=79 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=79 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=80 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=80 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=81 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=81 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=82 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=82 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=83 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=83 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=84 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=84 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=85 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=85 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=86 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=86 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=87 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=87 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=88 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=88 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=89 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=89 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=90 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=90 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=91 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=91 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=92 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=92 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=93 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=93 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=94 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=94 agent=2
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=95 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=95 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=96 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=96 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=97 agent=1
+  OBSERVING event at (3, 3)
+ORACLE CALLED: t=97 agent=2
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=98 agent=1
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=98 agent=2
+  WAITING: 5 cells in FOR, 1 events total
+ORACLE CALLED: t=99 agent=1
+  WAITING: 4 cells in FOR, 1 events total
+ORACLE CALLED: t=99 agent=2
+  OBSERVING event at (3, 3)

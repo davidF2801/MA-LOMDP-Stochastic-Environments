@@ -313,7 +313,7 @@ function simulate_recreated_environment(
             t_clean = minimum([tau[j] for j in keys(tau)])
             
             # Roll forward deterministically from uniform belief to t_clean using known observations
-            B = GroundStation.initialize_global_belief(env)
+            B = MacroPlannerAsync.initialize_uniform_belief(env)
             for t_roll in 0:(t_clean-1)
                 B = evolve_no_obs(B, env)
                 # Apply known observations (perfect observations)

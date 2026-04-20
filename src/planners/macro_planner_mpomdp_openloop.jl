@@ -54,7 +54,8 @@ so it is not directly comparable to ABBA/SB-ABBA which respect sync intervals.
 Returns: Vector of JointAction (one per timestep), planning_time
 """
 function best_joint_plan_mpomdp(env, belief::Belief, agents::Vector{Agent}, C::Int, gs_state; 
-                                rng::AbstractRNG=Random.GLOBAL_RNG)
+                                rng::AbstractRNG=Random.GLOBAL_RNG,
+                                N_sequences::Int=0)
     # Ensure agents are sorted by id for consistent ordering
     sorted_agents = sort(agents, by=a -> a.id)
     start_time = time()
@@ -63,10 +64,14 @@ function best_joint_plan_mpomdp(env, belief::Belief, agents::Vector{Agent}, C::I
     println("  📊 Using centralized observations from all agents")
     println("  🎯 Planning joint actions (one per agent per timestep)")
     
-    # Generate all possible joint action sequences
-    joint_sequences = generate_joint_action_sequences(sorted_agents, env, C, gs_state, rng)
+    # Generate joint action sequences
+    #
+    # For small problems we keep the original exact enumeration.
+    # For larger instances (or when N_sequences > 0), we can instead
+    # sample up to N_sequences joint sequences from the full space.
+    joint_sequences = generate_joint_action_sequences(sorted_agents, env, C, gs_state, rng; N_sequences=N_sequences)
     
-    println("  🔍 Generated $(length(joint_sequences)) joint action sequences")
+    println("  🔍 Using $(length(joint_sequences)) joint action sequences for evaluation")
     
     if isempty(joint_sequences)
         println("  ⚠️  No feasible joint sequences found, returning wait actions")
@@ -78,7 +83,10 @@ function best_joint_plan_mpomdp(env, belief::Belief, agents::Vector{Agent}, C::I
     best_sequence = nothing
     best_value = -Inf
     
-    println("  🔍 Evaluating $(length(joint_sequences)) joint sequences...")
+    total_sequences = length(joint_sequences)
+    println("  🔍 Evaluating $(total_sequences) joint sequences...")
+    # Print progress roughly every 5% of the work (at least every 1 sequence)
+    progress_step = max(1, Int(cld(total_sequences, 20)))
     for (i, joint_seq) in enumerate(joint_sequences)
         value = calculate_joint_sequence_reward(joint_seq, belief, env, sorted_agents, C, gs_state)
         
@@ -87,8 +95,9 @@ function best_joint_plan_mpomdp(env, belief::Belief, agents::Vector{Agent}, C::I
             best_sequence = joint_seq
         end
         
-        if i % 100 == 0
-            println("    Evaluated $(i)/$(length(joint_sequences)) sequences, best value: $(round(best_value, digits=3))")
+        if (i % progress_step == 0) || (i == total_sequences)
+            perc = round(100 * i / total_sequences; digits=1)
+            println("    Progress: $(i)/$(total_sequences) ($(perc)%), best value: $(round(best_value, digits=3))")
         end
     end
     
@@ -102,13 +111,16 @@ function best_joint_plan_mpomdp(env, belief::Belief, agents::Vector{Agent}, C::I
 end
 
 """
-generate_joint_action_sequences(agents, env, C, gs_state, rng)
-Generates all possible joint action sequences of length C.
+generate_joint_action_sequences(agents, env, C, gs_state, rng; N_sequences=0)
+Generate joint action sequences of length C.
 
-Each sequence is a Vector{JointAction} where each JointAction contains
-one action per agent (ordered by agent.id).
+If N_sequences <= 0, performs the original exact enumeration of *all*
+joint sequences. If N_sequences > 0, samples up to N_sequences distinct
+sequences uniformly at random from the (implicit) full space.
 """
-function generate_joint_action_sequences(agents::Vector{Agent}, env, C::Int, gs_state, rng::AbstractRNG=Random.GLOBAL_RNG)
+function generate_joint_action_sequences(agents::Vector{Agent}, env, C::Int, gs_state,
+                                         rng::AbstractRNG=Random.GLOBAL_RNG;
+                                         N_sequences::Int=0)
     if C == 0
         return Vector{Vector{JointAction}}[]
     end
@@ -156,39 +168,55 @@ function generate_joint_action_sequences(agents::Vector{Agent}, env, C::Int, gs_
         push!(actions_per_agent_per_timestep, agent_actions_at_t)
     end
     
-    # Generate all joint sequences by taking Cartesian product at each timestep
-    # Then taking Cartesian product across timesteps
-    joint_sequences = Vector{Vector{JointAction}}()
-    
     # For each timestep, generate all joint actions (Cartesian product of agent actions)
     joint_actions_per_timestep = Vector{Vector{JointAction}}()
     
     for t in 1:C
         agent_actions_at_t = actions_per_agent_per_timestep[t]
         
-        # Generate all combinations of actions across agents (Cartesian product)
         timestep_joint_actions = Vector{JointAction}()
-        
-        # Use Iterators.product to get all combinations
         for action_combo in Iterators.product(agent_actions_at_t...)
-            # Ensure actions are ordered by agent.id
             ordered_actions = [action for action in action_combo]
             push!(timestep_joint_actions, JointAction(ordered_actions))
         end
-        
         push!(joint_actions_per_timestep, timestep_joint_actions)
     end
     
-    # Now generate sequences by selecting one joint action per timestep (full enumeration for exact optimum)
-    for joint_action_combo in Iterators.product(joint_actions_per_timestep...)
-        sequence = [ja for ja in joint_action_combo]
+    # If N_sequences <= 0, do full enumeration (original behaviour)
+    if N_sequences <= 0
+        joint_sequences = Vector{Vector{JointAction}}()
+        for joint_action_combo in Iterators.product(joint_actions_per_timestep...)
+            sequence = [ja for ja in joint_action_combo]
+            push!(joint_sequences, sequence)
+        end
+        if length(joint_sequences) > 50000
+            println("  ⚠️  Large sequence space: $(length(joint_sequences)) sequences (exact search may be slow)")
+        end
+        return joint_sequences
+    end
+
+    # Otherwise, sample up to N_sequences sequences uniformly at random
+    joint_sequences = Vector{Vector{JointAction}}()
+    seen = Set{Vector{Int}}()  # store indices to avoid trivial duplicates
+    
+    # Precompute counts per timestep for index-based sampling
+    counts_per_timestep = [length(joint_actions_per_timestep[t]) for t in 1:C]
+    
+    max_trials = 10 * N_sequences
+    trials = 0
+    while length(joint_sequences) < N_sequences && trials < max_trials
+        trials += 1
+        idxs = [rand(rng, 1:counts_per_timestep[t]) for t in 1:C]
+        key = idxs
+        if key in seen
+            continue
+        end
+        push!(seen, key)
+        sequence = [joint_actions_per_timestep[t][idxs[t]] for t in 1:C]
         push!(joint_sequences, sequence)
     end
 
-    if length(joint_sequences) > 50000
-        println("  ⚠️  Large sequence space: $(length(joint_sequences)) sequences (exact search may be slow)")
-    end
-
+    println("  📉 Sampled $(length(joint_sequences)) joint sequences (target N_sequences=$(N_sequences))")
     return joint_sequences
 end
 

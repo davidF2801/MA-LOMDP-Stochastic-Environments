@@ -293,7 +293,58 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
             agent.oracle_obs_history = Dict{Tuple{Int, Int}, Tuple{Int, Int}}()  # cell -> (count, last_time)
         end
         
-        # Find ALL events in FOR
+        # Two-cell contiguous mode: only when enabled (does not affect main.jl / main_5x5)
+        use_two_cell = hasproperty(env, :max_sensing_targets) && env.max_sensing_targets >= 2 && Types.CONTIGUOUS_PAIRS_ONLY[]
+        if use_two_cell
+            pairs = Types.contiguous_pairs(for_cells)
+            chosen_pair = nothing
+            if !isempty(pairs)
+                # Score each pair: (event_count_in_pair, -total_obs_count, time_since_obs) -> prefer more events, least observed, longest since
+                pair_scores = []
+                for pair in pairs
+                    event_count = sum((1 for c in pair if ground_truth[c[2], c[1]] == Types.EVENT_PRESENT); init=0)
+                    total_obs = 0
+                    time_since = typemax(Int)
+                    for c in pair
+                        if haskey(agent.oracle_obs_history, c)
+                            obs_count, last_t = agent.oracle_obs_history[c]
+                            total_obs += obs_count
+                            time_since = min(time_since, current_time - last_t)
+                        else
+                            time_since = min(time_since, typemax(Int))
+                        end
+                    end
+                    push!(pair_scores, (pair, event_count, total_obs, time_since == typemax(Int) ? -1 : time_since))
+                end
+                # Prefer pairs with at least one event; then least total_obs; then longest time_since
+                filter!(ps -> ps[2] > 0, pair_scores)
+                if !isempty(pair_scores)
+                    sort!(pair_scores, by = x -> (-x[2], x[3], -x[4]))  # event_count desc, total_obs asc, time_since desc
+                    best_obs = pair_scores[1][3]
+                    best_time = pair_scores[1][4]
+                    tied = [ps[1] for ps in pair_scores if ps[2] == pair_scores[1][2] && ps[3] == best_obs && ps[4] == best_time]
+                    chosen_pair = rand(tied)
+                end
+            end
+            if chosen_pair !== nothing
+                for c in chosen_pair
+                    if haskey(agent.oracle_obs_history, c)
+                        obs_count, _ = agent.oracle_obs_history[c]
+                        agent.oracle_obs_history[c] = (obs_count + 1, current_time)
+                    else
+                        agent.oracle_obs_history[c] = (1, current_time)
+                    end
+                end
+                println("  🎯 Agent $(agent_id) observing contiguous pair $(chosen_pair)")
+                agent.battery_level = max(0.0, agent.battery_level - agent.observation_cost * 2)
+                return SensingAction(agent_id, collect(chosen_pair), false)
+            else
+                println("  ⏸️  Agent $(agent_id) waiting - no events in FOR (two-cell mode)")
+                return SensingAction(agent_id, Tuple{Int, Int}[], false)
+            end
+        end
+        
+        # Find ALL events in FOR (single-cell mode)
         event_cells = Tuple{Int, Int}[]
         for cell in for_cells
             x, y = cell
@@ -358,12 +409,12 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
         end
     end
     
-    if plan === nothing && plan_type != :policy && plan_type != :pbvi_policy_tree && plan_type != :pomcp_online
+    if plan === nothing && plan_type != :policy && plan_type != :pbvi_policy_tree && plan_type != :pomcp_online && plan_type != :dec_sb_abba_online && plan_type != :do_sb_abba_online
         # No plan available, use default wait action (pomcp_online uses reactive_policy, not plan)
         return SensingAction(agent_id, Tuple{Int, Int}[], false)
     end
-    if plan_type == :script || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx || plan_type == :macro_approx_099 || plan_type == :macro_approx_095 || plan_type == :macro_approx_090 || plan_type == :prior_based || plan_type == :pbvi || plan_type == :pbvi_mis || plan_type == :mpomdp_openloop || plan_type == :pomcp
-        # Execute macro-script (open-loop), random sequence, future actions sequence, sweep sequence, greedy sequence, macro-approximate sequence, prior-based sequence, PBVI sequence, or PBVI+MIS sequence
+    if plan_type == :script || plan_type == :joint_abba || plan_type == :random || plan_type == :future_actions || plan_type == :sweep || plan_type == :greedy || plan_type == :macro_approx || plan_type == :macro_approx_099 || plan_type == :macro_approx_095 || plan_type == :macro_approx_090 || plan_type == :prior_based || plan_type == :pbvi || plan_type == :pbvi_rollout || plan_type == :pbvi_mis || plan_type == :mpomdp_openloop || plan_type == :pomcp || plan_type == :klolop || plan_type == :posts
+        # Execute macro-script (open-loop), random, sweep, greedy, prior-based, PBVI, PBVI+MIS, MPOMDP, POMCP, or KL-OLOP sequence
         if !isempty(plan)
             # Get the action at the current plan index
             if agent.plan_index <= length(plan)
@@ -386,7 +437,7 @@ function execute_plan(agent::Agent, plan, plan_type::Symbol, local_obs_history::
             return SensingAction(agent_id, Tuple{Int, Int}[], false)
         end
         
-    elseif plan_type == :policy || plan_type == :pbvi_policy_tree || plan_type == :pomcp_online
+    elseif plan_type == :policy || plan_type == :pbvi_policy_tree || plan_type == :pomcp_online || plan_type == :dec_sb_abba_online || plan_type == :do_sb_abba_online
         # Execute reactive policy (closed-loop) for other policy-based planners
         if agent.reactive_policy !== nothing
             # Use the reactive policy function directly

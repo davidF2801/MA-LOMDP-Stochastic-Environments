@@ -143,18 +143,29 @@ function generate_prior_based_sequence(agent, env, C::Int, gs_state, prior_prob_
         # Get field of regard at this position
         for_cells = get_field_of_regard_at_position(agent, agent_pos, env)
         
-        # Sample action based on prior probabilities in field of regard
-        chosen_cell = sample_action_from_prior_probabilities(for_cells, prior_prob_map)
-        
-        if chosen_cell !== nothing
-            # Create sensing action for the chosen cell
-            action = SensingAction(agent.id, [chosen_cell], false)
-            prob = prior_prob_map[chosen_cell[2], chosen_cell[1]]
-            println("  Step $(t): Agent at $(agent_pos), sensing cell $(chosen_cell) (prob: $(round(prob, digits=4)))")
+        # Two-cell-only mode: only contiguous pairs when CONTIGUOUS_PAIRS_ONLY and max_sensing_targets >= 2
+        two_cell_only = env.max_sensing_targets >= 2 && Types.CONTIGUOUS_PAIRS_ONLY[]
+        if two_cell_only && length(for_cells) > 1
+            pairs = Types.contiguous_pairs(for_cells)
+            if !isempty(pairs)
+                chosen_pair = rand(pairs)
+                action = SensingAction(agent.id, collect(chosen_pair), false)
+                println("  Step $(t): Agent at $(agent_pos), sensing pair $(chosen_pair)")
+            else
+                action = SensingAction(agent.id, Tuple{Int, Int}[], false)
+                println("  Step $(t): Agent at $(agent_pos), no contiguous pair, waiting")
+            end
         else
-            # No suitable cell found, use wait action
-            action = SensingAction(agent.id, Tuple{Int, Int}[], false)
-            println("  Step $(t): Agent at $(agent_pos), no suitable cell found, waiting")
+            # Sample action based on prior probabilities in field of regard
+            chosen_cell = sample_action_from_prior_probabilities(for_cells, prior_prob_map)
+            if chosen_cell !== nothing
+                action = SensingAction(agent.id, [chosen_cell], false)
+                prob = prior_prob_map[chosen_cell[2], chosen_cell[1]]
+                println("  Step $(t): Agent at $(agent_pos), sensing cell $(chosen_cell) (prob: $(round(prob, digits=4)))")
+            else
+                action = SensingAction(agent.id, Tuple{Int, Int}[], false)
+                println("  Step $(t): Agent at $(agent_pos), no suitable cell found, waiting")
+            end
         end
         
         push!(action_sequence, action)

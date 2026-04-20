@@ -10,6 +10,7 @@ using ..Agents
 
 # Import planner modules
 include("macro_planner_async.jl")
+include("macro_planner_async_joint.jl")
 include("macro_planner_approx.jl")
 include("policy_tree_planner.jl")
 include("macro_planner_random.jl")
@@ -17,13 +18,18 @@ include("macro_planner_sweep.jl")
 include("macro_planner_greedy.jl")
 include("macro_planner_prior_based.jl")
 include("macro_planner_pbvi.jl")
+include("macro_planner_pbvi_rollout.jl")
 include("macro_planner_pbvi_policy_tree.jl")
 include("macro_planner_oracle.jl")
 include("macro_planner_pbvi_mis.jl")
 include("macro_planner_mpomdp_openloop.jl")
 include("macro_planner_pomcp.jl")
+include("macro_planner_klolop.jl")
+include("macro_planner_posts.jl")
+include("online_planner_do_sb_abba.jl")
 
 using .MacroPlannerAsync
+using .MacroPlannerAsyncJoint
 using .MacroPlannerAsyncApprox
 using .PolicyTreePlanner
 using .MacroPlannerRandom
@@ -31,11 +37,15 @@ using .MacroPlannerSweep
 using .MacroPlannerGreedy
 using .MacroPlannerPriorBased
 using .MacroPlannerPBVI
+using .MacroPlannerPBVIRollout
 using .AsyncPBVIPolicyTree
 using .MacroPlannerOracle
 using .MacroPlannerPBVIMIS
 using .MacroPlannerMPOMDPOpenLoop
 using .MacroPlannerPOMCP
+using .MacroPlannerKLOLOP
+using .MacroPlannerPOSTS
+using .OnlinePlannerDoSBABBA
 
 # Import Agent type from TrajectoryPlanner
 include("../agents/trajectory_planner.jl")
@@ -54,7 +64,54 @@ import ..Environment.EventDynamicsModule: rsp_transition_probs
 # Import functions from MacroPlannerAsync
 import .MacroPlannerAsync: initialize_uniform_belief, get_known_observations_at_time, has_known_observation, get_known_observation
 
-export maybe_sync!, GroundStationState, update_global_belief_rsp!, precompute_worlds!
+export maybe_sync!, GroundStationState, update_global_belief_rsp!, precompute_worlds!, pomcp_after_step!,
+       set_pomcp_n_sims_from_main, set_mpomdp_n_sequences_from_main, set_pbvi_rollout_n_sequences_from_main,
+       set_klolop_budget_from_main,
+       set_posts_budget_from_main,
+       set_do_sb_abba_params_from_main,
+       set_do_consistency_weight_from_main,
+       set_dec_sb_abba_params_from_main,
+       set_dec_consistency_weight_from_main
+
+"""
+POMCP, MPOMDP, and KL-OLOP search budgets, configurable from main scripts.
+Defaults are modest; experiments override via setter functions.
+"""
+const POMCP_N_SIMS = Ref(200)
+const MPOMDP_N_SEQUENCES = Ref(-1)
+"""Number of macro-sequence candidates sampled for `:pbvi_rollout` (use `-1` for full enumeration)."""
+const PBVI_ROLLOUT_N_SEQUENCES = Ref(500)
+const KLOLOP_BUDGET = Ref(500)
+
+function set_pomcp_n_sims_from_main(n::Int)
+    POMCP_N_SIMS[] = n
+end
+
+function set_mpomdp_n_sequences_from_main(n::Int)
+    MPOMDP_N_SEQUENCES[] = n
+end
+
+function set_pbvi_rollout_n_sequences_from_main(n::Int)
+    PBVI_ROLLOUT_N_SEQUENCES[] = n
+end
+
+function set_klolop_budget_from_main(n::Int)
+    KLOLOP_BUDGET[] = n
+end
+
+const POSTS_BUDGET = Ref(10_000)
+
+function set_posts_budget_from_main(n::Int)
+    POSTS_BUDGET[] = n
+end
+
+"""
+    pomcp_after_step!(agent, action, observation)
+After an env step, update the POMCP tree root to the node for (action, observation). No-op if agent does not use POMCP.
+"""
+function pomcp_after_step!(agent, action, observation)
+    MacroPlannerPOMCP.pomcp_after_step!(agent, action, observation)
+end
 
 """
 GroundStationState - Maintains global belief and agent synchronization info
@@ -124,10 +181,26 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
             # Sort agents by id for consistent ordering
             sorted_agents = sort(agents, by=a -> a.id)
             
-            # Plan joint actions for all agents
-            joint_plan, planning_time = MacroPlannerMPOMDPOpenLoop.best_joint_plan_mpomdp(
-                env, gs_state.global_belief, sorted_agents, C, gs_state, rng=rng
-            )
+            # Plan joint actions.
+            # N_sequences is configured from main scripts. If N_sequences <= 0,
+            # we fall back to the original full enumeration behaviour.
+            is_small_exact = (env.width == 4 && env.height == 3) || (env.width == 3 && env.height == 4)
+            N_sequences = MPOMDP_N_SEQUENCES[]
+            if is_small_exact && N_sequences <= 0
+                joint_plan, planning_time = MacroPlannerMPOMDPOpenLoop.best_joint_plan_mpomdp(
+                    env, gs_state.global_belief, sorted_agents, C, gs_state; rng=rng
+                )
+            else
+                if N_sequences <= 0
+                    joint_plan, planning_time = MacroPlannerMPOMDPOpenLoop.best_joint_plan_mpomdp(
+                        env, gs_state.global_belief, sorted_agents, C, gs_state; rng=rng
+                    )
+                else
+                    joint_plan, planning_time = MacroPlannerMPOMDPOpenLoop.best_joint_plan_mpomdp(
+                        env, gs_state.global_belief, sorted_agents, C, gs_state; rng=rng, N_sequences=N_sequences
+                    )
+                end
+            end
             
             # Store joint plan
             gs_state.joint_plan = joint_plan
@@ -204,6 +277,16 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 gs_state.total_planning_time += planning_time
                 gs_state.num_plans_computed += 1
                 println("⏱️  Agent $(agent_id) planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :joint_abba
+                println("🔀 Computing Joint ABBA plan for agent $(agent_id)")
+                new_plan, planning_time = MacroPlannerAsyncJoint.best_script_joint(
+                    env, gs_state.global_belief, agent, C_i, other_plans, gs_state,
+                )
+                gs_state.agent_plan_types[agent_id] = :joint_abba
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) Joint ABBA planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :policy
                 println("🌳 Computing policy tree for agent $(agent_id)")
                 reactive_policy, planning_time, policy_tree = PolicyTreePlanner.best_policy_tree(env, gs_state.global_belief, agent, C_i, gs_state, rng=rng)
@@ -280,16 +363,19 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 println("🎲 Initializing online POMCP policy for agent $(agent_id)")
                 t_start_agent = time()
 
-                # Create an online POMCP policy object for this agent
-                pomcp_policy = MacroPlannerPOMCP.init_online_pomcp_policy(env)
+                # POMCP budget configured from main scripts via set_pomcp_n_sims_from_main(...)
+                pomcp_policy = MacroPlannerPOMCP.init_online_pomcp_policy(
+                    env;
+                    n_sims   = POMCP_N_SIMS[],
+                    max_depth = C_i,
+                )
 
                 # Build a reactive policy closure that uses the current global belief
                 # and reuses the same POMCP tree across timesteps.
                 reactive_policy = function (obs_history, current_time::Int)
-                    # Use the up-to-date global belief maintained by the ground station
                     belief_now = gs_state.global_belief
-                    # Plan index relative to current sync is always 1 for online receding-horizon use
-                    return MacroPlannerPOMCP.pomcp_select_action!(pomcp_policy,
+                    t_start_step = time()
+                    action = MacroPlannerPOMCP.pomcp_select_action!(pomcp_policy,
                                                                   belief_now,
                                                                   agent,
                                                                   env,
@@ -297,10 +383,16 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                                                                   step_offset=1,
                                                                   n_particles=100,
                                                                   rng=rng)
+                    step_planning_time = time() - t_start_step
+                    push!(gs_state.planning_times[agent_id], step_planning_time)
+                    gs_state.total_planning_time += step_planning_time
+                    gs_state.num_plans_computed += 1
+                    return action
                 end
 
-                # Store reactive policy on the agent; no open-loop script is created
+                # Store reactive policy and policy on agent (for root update after each step)
                 agent.reactive_policy = reactive_policy
+                agent.pomcp_policy = pomcp_policy
                 gs_state.agent_plan_types[agent_id] = :pomcp_online
 
                 planning_time = time() - t_start_agent
@@ -313,7 +405,14 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
             elseif planning_mode == :pbvi
                 println("🧠 Computing PBVI plan for agent $(agent_id)")
                 
-                new_plan, planning_time = MacroPlannerPBVI.best_script(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
+                hyper = MacroPlannerPBVI.get_hyperparams()
+                new_plan, planning_time = MacroPlannerPBVI.best_script(
+                    env, gs_state.global_belief, agent, C_i, other_plans, gs_state;
+                    rng=rng,
+                    N_seed=hyper.N_seed,
+                    N_particles=hyper.N_particles,
+                    N_sweeps=hyper.N_sweeps,
+                )
                 gs_state.agent_plan_types[agent_id] = :pbvi
                 
                 # Track planning time
@@ -321,6 +420,18 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 gs_state.total_planning_time += planning_time
                 gs_state.num_plans_computed += 1
                 println("⏱️  Agent $(agent_id) PBVI planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :pbvi_rollout
+                println("🎲 Computing PBVI-Rollout (seed-averaged, sampled macro-sequences) for agent $(agent_id)")
+                new_plan, planning_time = MacroPlannerPBVIRollout.best_script(
+                    env, gs_state.global_belief, agent, C_i, other_plans, gs_state;
+                    rng=rng,
+                    N_sequences=PBVI_ROLLOUT_N_SEQUENCES[],
+                )
+                gs_state.agent_plan_types[agent_id] = :pbvi_rollout
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) PBVI-Rollout planning time: $(round(planning_time, digits=3)) seconds")
             elseif planning_mode == :pbvi_policy_tree
                 println("🌳 Computing PBVI policy tree for agent $(agent_id)")
                 reactive_policy, planning_time, policy_tree = AsyncPBVIPolicyTree.best_policy_tree(env, gs_state.global_belief, agent, C_i, other_plans, gs_state, rng=rng)
@@ -353,12 +464,53 @@ function maybe_sync!(env, gs_state::GroundStationState, agents, t::Int;
                 gs_state.total_planning_time += planning_time
                 gs_state.num_plans_computed += 1
                 println("⏱️  Agent $(agent_id) PBVI+MIS planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :klolop
+                # Belief already updated with this agent's observations (update_global_belief! above)
+                println("🌲 Computing KL-OLOP open-loop plan for agent $(agent_id) (individual, no coordination)")
+                new_plan, planning_time = MacroPlannerKLOLOP.best_script_klolop(
+                    env, gs_state.global_belief, agent, C_i, gs_state;
+                    rng=rng, budget=KLOLOP_BUDGET[],
+                )
+                gs_state.agent_plan_types[agent_id] = :klolop
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) KL-OLOP planning time: $(round(planning_time, digits=3)) seconds")
+            elseif planning_mode == :do_sb_abba || planning_mode == :dec_sb_abba
+                # :do_sb_abba = new canonical name. :dec_sb_abba kept as alias
+                # for backward compatibility with older experiment scripts.
+                println("🧩 Initialising DO-SB-ABBA-α reactive policy for agent $(agent_id)")
+                t_start_agent = time()
+                # Build the closure once per sync; the closure handles per-step
+                # replanning and accounts for its own per-step time in gs_state.
+                reactive_policy = OnlinePlannerDoSBABBA.init_do_sb_abba_policy(
+                    env, gs_state, agent; rng=rng,
+                )
+                agent.reactive_policy = reactive_policy
+                gs_state.agent_plan_types[agent_id] = :do_sb_abba_online
+                init_time = time() - t_start_agent
+                push!(gs_state.planning_times[agent_id], init_time)
+                gs_state.total_planning_time += init_time
+                gs_state.num_plans_computed  += 1
+                println("⏱️  Agent $(agent_id) DO-SB-ABBA init time: " *
+                        "$(round(init_time, digits=3)) seconds (per-step cost accrued online)")
+            elseif planning_mode == :posts
+                println("🌲 Computing POSTS open-loop plan for agent $(agent_id) (Phan et al., AAAI-19)")
+                new_plan, planning_time = MacroPlannerPOSTS.best_script_posts(
+                    env, gs_state.global_belief, agent, C_i, gs_state;
+                    rng=rng, budget=POSTS_BUDGET[],
+                )
+                gs_state.agent_plan_types[agent_id] = :posts
+                push!(gs_state.planning_times[agent_id], planning_time)
+                gs_state.total_planning_time += planning_time
+                gs_state.num_plans_computed += 1
+                println("⏱️  Agent $(agent_id) POSTS planning time: $(round(planning_time, digits=3)) seconds")
             else
                 error("Unknown planning mode: $(planning_mode)")
             end
             
             # Store plan in ground station state (for non-policy modes)
-            if planning_mode != :policy && planning_mode != :pbvi_policy_tree && planning_mode != :oracle && planning_mode != :pomcp
+            if planning_mode != :policy && planning_mode != :pbvi_policy_tree && planning_mode != :oracle && planning_mode != :pomcp && planning_mode != :dec_sb_abba && planning_mode != :do_sb_abba
                 gs_state.agent_plans[agent_id] = new_plan
                 # Reset agent's plan index for the new plan
                 agent.plan_index = 1

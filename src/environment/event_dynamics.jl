@@ -16,7 +16,7 @@ import ..Types.EventDynamics, ..Types.TwoStateEventDynamics
 # Import RSP transition probability from Types module
 import ..Types.get_transition_probability_rsp
 export DBNTransitionModel2, DBNTransitionModel4, update_events!, get_neighbor_states, initialize_random_events,
-       transition_rsp!
+       transition_rsp!, rsp_transition_probabilities
 
 # """
 # Abstract type for different event state enums
@@ -271,6 +271,49 @@ function transition_rsp!(new_map::EventMap, old_map::EventMap, param_maps::Types
             new_map[y, x] = EventState(0)
         end
     end
+end
+
+"""
+    rsp_transition_probabilities(old_map, param_maps)
+
+Return `(prob_no_event, prob_event)` with the **same** per-cell transition probabilities used by
+[`transition_rsp!`](@ref) for sampling, given `old_map` and heterogeneous RSP parameters.
+Useful for logging and offline reconstruction without re-running the simulator.
+"""
+function rsp_transition_probabilities(old_map::EventMap, param_maps::Types.RSPParameterMaps)
+    height, width = size(old_map)
+    prob_event = Matrix{Float64}(undef, height, width)
+    prob_no_event = Matrix{Float64}(undef, height, width)
+    for y in 1:height, x in 1:width
+        current_state = old_map[y, x]
+        neighbor_states = Int[]
+        for dx in -1:1, dy in -1:1
+            if dx == 0 && dy == 0
+                continue
+            end
+            nx, ny = x + dx, y + dy
+            if 1 <= nx <= width && 1 <= ny <= height
+                push!(neighbor_states, Int(old_map[ny, nx]))
+            else
+                push!(neighbor_states, 0)
+            end
+        end
+        cell_params = Types.get_cell_rsp_params(param_maps, y, x)
+        pe = Types.get_transition_probability_rsp(Int(EVENT_PRESENT), Int(current_state), neighbor_states;
+            λ=cell_params.lambda, β0=cell_params.beta0, α=cell_params.alpha, δ=cell_params.delta)
+        pno = 1 - pe
+        total_prob = pno + pe
+        if total_prob > 0
+            pno /= total_prob
+            pe /= total_prob
+        else
+            pno = 0.5
+            pe = 0.5
+        end
+        prob_event[y, x] = pe
+        prob_no_event[y, x] = pno
+    end
+    return prob_no_event, prob_event
 end
 
 """

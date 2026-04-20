@@ -253,28 +253,29 @@ mutable struct Agent
     reactive_policy::Any              # Reactive policy function (for policy tree planner)
     env_ref::Any                      # Environment reference (for oracle planner online decisions)
     oracle_obs_history::Any           # Oracle observation tracking: cell -> (count, last_time)
+    pomcp_policy::Any                 # Online POMCP policy (for root update after each step)
 end
 
 # Constructor with default observation history and plan index
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, belief::Any)
-    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing, nothing, nothing)
+    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing, nothing, nothing, nothing)
 end
 
 # Constructor with default belief, observation history, and plan index
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int)
-    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing, nothing, nothing)
+    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, 100.0, 100.0, 1.0, 2.0, nothing, nothing, nothing, nothing)
 end
 
 # Constructor with custom battery parameters
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, 
                max_battery::Float64, charging_rate::Float64, observation_cost::Float64)
-    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing, nothing, nothing)
+    return Agent(id, trajectory, sensor, phase_offset, nothing, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing, nothing, nothing, nothing)
 end
 
 # Constructor with all parameters
 function Agent(id::Int, trajectory::Trajectory, sensor::RangeLimitedSensor, phase_offset::Int, belief::Any,
                max_battery::Float64, charging_rate::Float64, observation_cost::Float64)
-    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing, nothing, nothing)
+    return Agent(id, trajectory, sensor, phase_offset, belief, GridObservation[], 1, max_battery, max_battery, charging_rate, observation_cost, nothing, nothing, nothing, nothing)
 end
 
 # Export all types
@@ -472,6 +473,87 @@ function calculate_entropy_from_distribution(prob_vector::Vector{Float64})
     end
     return entropy
 end
+
+"""
+Whether two grid cells are edge-adjacent (share a side; Manhattan distance 1).
+"""
+function cells_adjacent(c1::Tuple{Int,Int}, c2::Tuple{Int,Int})
+    return abs(c1[1] - c2[1]) + abs(c1[2] - c2[2]) == 1
+end
+
+"""
+Whether a set of grid cells forms a connected component (every cell is reachable
+from every other via edge-adjacent steps within the set).
+"""
+function is_contiguous_set(cells::Vector{Tuple{Int,Int}})
+    n = length(cells)
+    n <= 1 && return true
+    cell_set = Set(cells)
+    start = cells[1]
+    stack = [start]
+    visited = Set{Tuple{Int,Int}}([start])
+    while !isempty(stack)
+        c = pop!(stack)
+        for (dx, dy) in ((1,0), (-1,0), (0,1), (0,-1))
+            nb = (c[1] + dx, c[2] + dy)
+            if nb in cell_set && !(nb in visited)
+                push!(visited, nb)
+                push!(stack, nb)
+            end
+        end
+    end
+    return length(visited) == n
+end
+
+"""
+Return all contiguous subsets of `cells` of size `n`.
+- n=1: each cell as a singleton.
+- n=2: all pairs of edge-adjacent cells.
+- n>2: all subsets of size n that are connected (form a contiguous set).
+Extendable to arbitrary n.
+"""
+function contiguous_subsets(cells::Vector{Tuple{Int,Int}}, n::Int)
+    if n <= 0
+        return Vector{Tuple{Int,Int}}[]
+    end
+    if n == 1
+        return [[c] for c in cells]
+    end
+    if n == 2
+        # result holds pairs (cell1, cell2); each element is Tuple{Tuple{Int,Int}, Tuple{Int,Int}}
+        result = Tuple{Tuple{Int,Int}, Tuple{Int,Int}}[]
+        for i in 1:length(cells), j in (i+1):length(cells)
+            if cells_adjacent(cells[i], cells[j])
+                push!(result, (cells[i], cells[j]))
+            end
+        end
+        return [collect(p) for p in result]
+    end
+    # n >= 3: all combinations of size n that are contiguous
+    result = Vector{Tuple{Int,Int}}[]
+    for combo in combinations(cells, n)
+        if is_contiguous_set(combo)
+            push!(result, combo)
+        end
+    end
+    return result
+end
+
+"""
+Contiguous pairs: all pairs of edge-adjacent cells in `cells`.
+Convenience for contiguous_subsets(cells, 2).
+"""
+function contiguous_pairs(cells::Vector{Tuple{Int,Int}})
+    return contiguous_subsets(cells, 2)
+end
+
+"""
+When true, multi-cell actions (e.g. when max_sensing_targets >= 2) are restricted
+to contiguous pairs (or contiguous subsets) instead of all combinations.
+Set to true only in mains that use two-cell contiguous FOR (e.g. main_9x9_circular_two_cells).
+Default false so main.jl and main_5x5_complex.jl are unaffected.
+"""
+const CONTIGUOUS_PAIRS_ONLY = Ref(false)
 
 """
 Generate combinations of elements
@@ -1043,6 +1125,7 @@ end
 export save_agent_actions_to_csv, calculate_ndd_expected_lifetime, calculate_ndd_actual_lifetime, calculate_and_save_ndd_metrics
 export EnhancedEventTracker, initialize_enhanced_event_tracker, update_enhanced_event_tracking!, mark_observed_events_with_time!, get_event_statistics
 export save_event_tracking_data, save_uncertainty_evolution_data, save_sync_event_data, create_observation_heatmap
+export save_event_evolution_replay_csv, save_rsp_transition_probabilities_csv, save_action_reward_log_csv, save_planner_environment_evolution_csv
 
 """
 Save detailed event tracking data to CSV
@@ -1202,6 +1285,123 @@ function create_observation_heatmap(action_history, grid_width, grid_height, res
     println("📁 Observation counts data saved to: $(basename(csv_filename))")
     
     return plot_filename, csv_filename
+end
+
+"""
+Save full ground-truth grid evolution (replay): one row per (timestep, x, y) with discrete state.
+"""
+function save_event_evolution_replay_csv(event_evolution::Vector{Matrix{EventState}},
+                                        results_dir::String, run_number::Int, planning_mode)
+    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
+    if !isdir(metrics_dir)
+        mkpath(metrics_dir)
+    end
+    filename = "ground_truth_event_evolution_$(planning_mode)_run$(run_number).csv"
+    filepath = joinpath(metrics_dir, filename)
+    rows = []
+    for (t1, grid) in enumerate(event_evolution)
+        t0 = t1 - 1
+        h, w = size(grid)
+        for y in 1:h, x in 1:w
+            push!(rows, Dict(:timestep => t0, :x => x, :y => y, :state => Int(grid[y, x])))
+        end
+    end
+    CSV.write(filepath, DataFrame(rows))
+    println("📁 Ground-truth event evolution saved to: $(filepath)")
+    return filepath
+end
+
+"""
+Save per-cell RSP transition probabilities used when simulating `event_evolution[k]` → `event_evolution[k+1]`.
+`prob_event_evolution[k]` aligns with timestep_from = k-1.
+"""
+function save_rsp_transition_probabilities_csv(prob_no_event_evolution::Vector{Matrix{Float64}},
+                                              prob_event_evolution::Vector{Matrix{Float64}},
+                                              results_dir::String, run_number::Int, planning_mode)
+    @assert length(prob_no_event_evolution) == length(prob_event_evolution)
+    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
+    if !isdir(metrics_dir)
+        mkpath(metrics_dir)
+    end
+    filename = "rsp_transition_probabilities_$(planning_mode)_run$(run_number).csv"
+    filepath = joinpath(metrics_dir, filename)
+    rows = []
+    for k in 1:length(prob_event_evolution)
+        t_from = k - 1
+        Pno = prob_no_event_evolution[k]
+        Pe = prob_event_evolution[k]
+        h, w = size(Pe)
+        for y in 1:h, x in 1:w
+            push!(rows, Dict(
+                :timestep_from => t_from, :timestep_to => t_from + 1,
+                :x => x, :y => y,
+                :p_no_event => Pno[y, x], :p_event => Pe[y, x]
+            ))
+        end
+    end
+    CSV.write(filepath, DataFrame(rows))
+    println("📁 RSP transition probabilities saved to: $(filepath)")
+    return filepath
+end
+
+"""
+Save per-agent action rewards from the paper-style formula (prior entropy + prior event probability via
+[`calculate_sophisticated_reward`](@ref) in the PBVI module), plus team step total and cumulative discounted return.
+"""
+function save_action_reward_log_csv(reward_rows::Vector{Dict{Symbol, Any}},
+                                   results_dir::String, run_number::Int, planning_mode,
+                                   discount_factor::Float64, total_discounted_return::Float64;
+                                   w_H::Float64, w_F::Float64, state_values::Vector{Float64})
+    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
+    if !isdir(metrics_dir)
+        mkpath(metrics_dir)
+    end
+    filename = "action_reward_log_$(planning_mode)_run$(run_number).csv"
+    filepath = joinpath(metrics_dir, filename)
+    if isempty(reward_rows)
+        df = DataFrame(timestep=Int[], agent_id=Int[], action_reward=Float64[],
+            team_step_reward=Float64[], cumulative_discounted_team=Float64[])
+        CSV.write(filepath, df)
+        println("📁 Action reward log (empty) saved to: $(filepath)")
+        return filepath
+    end
+    df = DataFrame(reward_rows)
+    CSV.write(filepath, df)
+    summary_path = joinpath(metrics_dir, "action_reward_summary_$(planning_mode)_run$(run_number).txt")
+    open(summary_path, "w") do io
+        println(io, "Discount factor (γ): $(discount_factor)")
+        println(io, "Reward log weights (from main script constants; logging uses these explicitly):")
+        println(io, "  w_H (entropy): $(w_H)")
+        println(io, "  w_F (value): $(w_F)")
+        println(io, "  F_1, F_2 (state values): $(state_values)")
+        println(io, "Total discounted return (sum_t γ^t * team_step_reward): $(round(total_discounted_return, digits=6))")
+    end
+    println("📁 Action reward log saved to: $(filepath)")
+    return filepath
+end
+
+"""
+Save environment snapshots recorded during planning (one matrix per simulated timestep, same indexing as animations).
+"""
+function save_planner_environment_evolution_csv(environment_evolution::Vector{Matrix{EventState}},
+                                               results_dir::String, run_number::Int, planning_mode)
+    metrics_dir = joinpath(results_dir, "Run $(run_number)", string(planning_mode), "metrics")
+    if !isdir(metrics_dir)
+        mkpath(metrics_dir)
+    end
+    filename = "planner_environment_evolution_$(planning_mode)_run$(run_number).csv"
+    filepath = joinpath(metrics_dir, filename)
+    rows = []
+    for (t1, grid) in enumerate(environment_evolution)
+        t0 = t1 - 1
+        h, w = size(grid)
+        for y in 1:h, x in 1:w
+            push!(rows, Dict(:timestep => t0, :x => x, :y => y, :state => Int(grid[y, x])))
+        end
+    end
+    CSV.write(filepath, DataFrame(rows))
+    println("📁 Planner environment evolution saved to: $(filepath)")
+    return filepath
 end
 
 # Export the additional saving functions

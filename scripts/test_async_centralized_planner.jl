@@ -76,7 +76,7 @@ const GROUND_STATION_X = 3            # Center column for 5x5 grid
 const GROUND_STATION_Y = 1            # Ground station Y position
 
 # 🎨 VISUALIZATION PARAMETERS
-const ANIMATION_FPS = 2               # Frames per second for animation
+const ANIMATION_FPS = 4               # Frames per second for animation (2x faster)
 const STATUS_UPDATE_INTERVAL = 10     # Print status every N steps
 
 # =============================================================================

@@ -23,7 +23,7 @@ import ..Agents.BeliefManagement
 import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefManagement.Belief,
        ..Agents.BeliefManagement.calculate_uncertainty_from_distribution, ..Agents.BeliefManagement.predict_belief_rsp,
        ..Agents.BeliefManagement.evolve_no_obs,..Agents.BeliefManagement.evolve_no_obs_fast, ..Agents.BeliefManagement.get_neighbor_beliefs,
-       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.product,
+       ..Agents.BeliefManagement.enumerate_joint_states, ..Agents.BeliefManagement.prob_product,
        ..Agents.BeliefManagement.normalize_belief_distributions, ..Agents.BeliefManagement.collapse_belief_to,
        ..Agents.BeliefManagement.enumerate_all_possible_outcomes, ..Agents.BeliefManagement.merge_equivalent_beliefs,
        ..Agents.BeliefManagement.calculate_cell_entropy, ..Agents.BeliefManagement.get_event_probability,
@@ -245,7 +245,7 @@ function build_belief_set(B_clean::Belief, agent_i::Agent, τ_i::Int, agents_j::
             push!(𝔅, BeliefPoint(τ, deepcopy(b_sys)))
             
             # Take a random action and simulate
-            a_rand = random_pointing(agent_i, τ, env)
+            a_rand = random_pointing(agent_i, τ, env, gs_state)
             (_, τ, b_sys) = simulate_one_step(τ, b_sys, a_rand, agent_i, agents_j, env, gs_state)
         end
     end
@@ -299,7 +299,7 @@ function pbvi(𝔅::Vector{BeliefPoint}, N_particles::Int, N_sweeps::Int, ε::Fl
             best_act = nothing
             
             # Get all feasible actions
-            action_set = all_pointings(agent_i, bp.clock, env)
+            action_set = all_pointings(agent_i, bp.clock, env, gs_state)
             
             for a in action_set
                 sum_Q = 0.0
@@ -532,14 +532,15 @@ end
 """
 Generate random pointing action
 """
-function random_pointing(agent::Agent, τ_clock::ClockVector, env)
-    # Get agent position at this time using agent's phase
+function random_pointing(agent::Agent, τ_clock::ClockVector, env, gs_state)
+    # Get agent position: PBVI phase p = steps since sync; use (time_step+phase, phase_offset)
     agent_index = find_agent_index(agent, env)
     if agent_index === nothing
         return SensingAction(agent.id, Tuple{Int, Int}[], false)
     end
     phase = τ_clock.phases[agent_index]
-    pos = get_position_at_time(agent.trajectory, phase)
+    actual_time = gs_state.time_step + phase
+    pos = get_position_at_time(agent.trajectory, actual_time, agent.phase_offset)
     
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
@@ -565,16 +566,17 @@ end
 """
 Get all pointing actions for agent
 """
-function all_pointings(agent::Agent, τ_clock::ClockVector, env)
+function all_pointings(agent::Agent, τ_clock::ClockVector, env, gs_state)
     actions = SensingAction[]
     
-    # Get agent position at this time using agent's phase
+    # Get agent position: PBVI phase p = steps since sync; use (time_step+phase, phase_offset)
     agent_index = find_agent_index(agent, env)
     if agent_index === nothing
         return [SensingAction(agent.id, Tuple{Int, Int}[], false)]
     end
     phase = τ_clock.phases[agent_index]
-    pos = get_position_at_time(agent.trajectory, phase)
+    actual_time = gs_state.time_step + phase
+    pos = get_position_at_time(agent.trajectory, actual_time, agent.phase_offset)
     # Get available cells in field of view
     available_cells = get_field_of_regard_at_position(agent, pos, env)
     # if agent.id == 2

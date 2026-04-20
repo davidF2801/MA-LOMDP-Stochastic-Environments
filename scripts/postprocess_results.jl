@@ -41,8 +41,7 @@ TARGET_RUNS = [
     #"run_2025-08-19T10-23-17-927-new",
     # Add more run directories here as needed
     # "run_2025-08-16T16-52-26-473",
-    # "run_2025-08-16T16-52-42-231",
-    #"run_2025-09-08T09-36-38-974"
+    # "run_2025-08-16T16-52-42-231", #4x3 original submission
     #"run_2026-01-29T16-25-34-037"
     #"run_2026-01-29T16-55-16-714"
     #"run_2026-02-04T11-36-43-894"
@@ -50,20 +49,85 @@ TARGET_RUNS = [
     #"run_2026-02-06T16-06-11-775"
     #"run_2026-02-13T09-40-14-099"
     #"run_2026-02-14T17-12-46-276",
-    "run_2026-02-15T22-34-22-346"
+    #"run_2026-02-14T17-12-46-276"
+    #"run_2026-02-26T12-13-17-457"
+    #"run_2026-02-13T09-40-14-099"
+    #"run_2026-02-20T17-38-12-398"
+    #"run_2026-02-27T19-06-36-217"
+    #"run_2026-02-28T23-42-26-769"
+    #  "run_2026-02-27T19-06-36-217", #4x3 klolop
+    #  "run_2025-08-16T16-52-42-231", #4x3 original submission
+    #  "run_2026-02-15T22-34-22-346", #4x3 New batch
+    # "run_2026-02-28T23-42-19-465",  #5x5 klolop
+    # "run_2025-08-17T14-08-17-424", #5x5 original submission
+    # "run_2026-03-02T12-58-22-025", #5x5 oracle
+    # "run_2026-03-01T09-19-46-709", #9x9 klolop two cells
+    # "run_2026-02-28T23-42-26-769", #9x9 klolop one cell
+    # "run_2025-09-08T09-36-38-974", #9x9 original submission
+    # "run_2026-03-02T12-59-00-637", #9x9 oracle
+    # "run_2026-02-20T17-38-12-398" #9x9 New batch two cells
+    #"run_2026-03-26T14-03-37-467", #4x3 joint abba
+    #"run_2026-04-08T23-44-11-840"
+    #"run_2026-04-08T23-44-11-864" #4x3 with rewards
+    #"run_2026-04-10T13-21-43-246" #5x5 with rewards
+    #"run_2026-04-18T12-18-53-687"  #5x5 with rewards
+    "run_2026-04-18T12-19-01-687", #9x9 with rewards
+    "run_2026-04-18T15-40-16-095" #9x9 with rewards
+
+    
 ]
 
 # Results path: relative to script location so it works regardless of cwd
 RESULTS_BASE = joinpath(@__DIR__, "..", "results")
 
-# Save plot in both PDF and PNG
-function savefig_both(p, basepath_with_ext::String)
-    savefig(p, basepath_with_ext)
-    pngpath = replace(basepath_with_ext, r"\.pdf$" => ".png")
-    if pngpath != basepath_with_ext
-        savefig(p, pngpath)
+# Save plot robustly in both PDF and PNG (with verification/retry)
+function _savefig_checked(p, outpath::String; attempts::Int=2, min_bytes::Int=128)
+    local last_err = nothing
+    for attempt in 1:attempts
+        try
+            savefig(p, outpath)
+            if isfile(outpath)
+                sz = stat(outpath).size
+                if sz >= min_bytes
+                    return true, sz
+                else
+                    # Remove clearly corrupt output (e.g., 0-byte files)
+                    rm(outpath; force=true)
+                    last_err = "file too small ($(sz) bytes)"
+                end
+            else
+                last_err = "file was not created"
+            end
+        catch e
+            last_err = e
+        end
+        sleep(0.15)
     end
-    return basepath_with_ext
+    return false, last_err
+end
+
+function savefig_both(p, basepath_with_ext::String)
+    mkpath(dirname(basepath_with_ext))
+    pngpath = replace(basepath_with_ext, r"\.pdf$" => ".png")
+
+    ok_pdf, info_pdf = _savefig_checked(p, basepath_with_ext; attempts=3, min_bytes=128)
+    ok_png, info_png = if pngpath != basepath_with_ext
+        _savefig_checked(p, pngpath; attempts=3, min_bytes=128)
+    else
+        (true, "same path")
+    end
+
+    if ok_pdf && ok_png
+        println("    ✓ Saved: $(basename(basepath_with_ext)) and $(basename(pngpath))")
+    else
+        println("    ❌ Plot save failed or produced corrupt file(s):")
+        println("      - PDF: $(ok_pdf ? "ok" : "failed ($(info_pdf))")")
+        if pngpath != basepath_with_ext
+            println("      - PNG: $(ok_png ? "ok" : "failed ($(info_png))")")
+        end
+    end
+
+    return (pdf_ok=ok_pdf, png_ok=ok_png, pdf_path=basepath_with_ext, png_path=pngpath)
 end
 # Output directory - use the first target run folder
 OUTPUT_DIR = joinpath(RESULTS_BASE, TARGET_RUNS[1])
@@ -71,12 +135,24 @@ OUTPUT_DIR = joinpath(RESULTS_BASE, TARGET_RUNS[1])
 # Performance metrics to analyze
 METRICS = [:event_observation_percentage, :final_uncertainty, :average_planning_time, :ndd_actual]
 
+# If true, for :average_planning_time we only use data from the LAST
+# TARGET_RUNS folder (typically the newest batch). Other metrics still
+# use all TARGET_RUNS as usual.
+const USE_LAST_RUN_FOR_PLANNING_TIME = true
+
 # Planning modes to compare
+#PLANNING_MODES = [:joint_abba]
+#PLANNING_MODES = [:oracle, :script, :mpomdp_openloop, :pbvi, :klolop, :greedy, :sweep, :prior_based,:random] #4x3
+#PLANNING_MODES = [:oracle, :script, :mpomdp_openloop, :pbvi] #4x3
+
+# PLANNING_MODES = [:oracle, :pbvi_1_0_0_0, :pbvi_0_5_0_5, :pbvi_0_0_1_0,:klolop, :prior_based, :random, :greedy] #5x5 and 9x9
+PLANNING_MODES = [:oracle, :pbvi_1_0_0_0,:klolop, :prior_based, :random, :greedy, :pbvi_rollout] #5x5 and 9x9
+
 #PLANNING_MODES = [:sweep, :script, :random]
-PLANNING_MODES = [:script, :pbvi, :prior_based, :oracle, :sweep, :greedy, :random, :mpomdp_openloop, :pomcp]
-#PLANNING_MODES = [:pbvi_0_5_0_5, :pbvi_1_0_0_0, :pbvi_0_0_1_0,:oracle, :random, :prior_based, :pomcp]
+#PLANNING_MODES = [:pomcp]
 #PLANNING_MODES = [:script, :pbvi, :prior_based, :random]
 #PLANNING_MODES = [:pbvi_mis, :oracle, :pbvi_0_5_0_5]
+#PLANNING_MODES = [:klolop]
 
 # Function to get display name for planning modes
 function get_mode_display_name(mode::Symbol)
@@ -86,12 +162,21 @@ function get_mode_display_name(mode::Symbol)
         return "ABBA"
     elseif mode == :pbvi
         return "SB-ABBA"
+    elseif mode == :pbvi_rollout
+        return "SB-ABBA (rollout)"
     elseif mode == :macro_approx_090
         return "PB-ABBA_090"
     elseif mode == :prior_based
         return "Prior-Based"
     elseif mode == :random
         return "Random"
+    elseif mode == :klolop
+        # Special capitalization for KL-OLOP planner
+        return "KL-OLOP"
+    elseif mode == :posts
+        return "POSTS"
+    elseif mode == :joint_abba
+        return "Joint ABBA"
     elseif startswith(mode_str, "pbvi_")
         # Parse PBVI variants with weights
         # Format: pbvi_X_Y_Z_W where X_Y is entropy weight (wh) and Z_W is detection weight (wv)
@@ -296,6 +381,42 @@ function extract_uncertainty_evolution(filepath::String)
 end
 
 """
+Extract per-timestep reward evolution from action_reward_log CSV.
+Returns a dict with:
+- :team_step_reward::Vector{Float64}
+- :cumulative_discounted_team::Vector{Float64}
+"""
+function extract_reward_log(filepath::String)
+    reward_data = Dict{Symbol, Vector{Float64}}(
+        :team_step_reward => Float64[],
+        :cumulative_discounted_team => Float64[]
+    )
+
+    try
+        df = CSV.read(filepath, DataFrame)
+        # CSV.jl uses String column names; `(:timestep in names(df))` is false for Symbol checks
+        colset = Set(String.(names(df)))
+        required_names = ("timestep", "team_step_reward", "cumulative_discounted_team")
+        if !all(n -> n in colset, required_names)
+            println("⚠️ Warning: Reward log missing required columns in $(filepath); have $(names(df))")
+            return reward_data
+        end
+
+        sort!(df, "timestep")
+        grouped = groupby(df, "timestep")
+
+        for g in grouped
+            push!(reward_data[:team_step_reward], first(skipmissing(g[!, "team_step_reward"])))
+            push!(reward_data[:cumulative_discounted_team], first(skipmissing(g[!, "cumulative_discounted_team"])))
+        end
+    catch e
+        println("⚠️ Warning: Could not parse reward log $(filepath): $(e)")
+    end
+
+    return reward_data
+end
+
+"""
 Find all results directories and extract data from multiple sources
 """
 function collect_results_data()
@@ -374,8 +495,23 @@ function collect_results_data()
                 end
                 
                 println("      Mode $(mode): Found $(length(metric_files)) metric files")
+
+                # Reward logs are stored separately from the performance text file
+                reward_log_files = String[]
+                for file in readdir(metrics_path)
+                    if startswith(file, "action_reward_log_") && endswith(file, ".csv")
+                        push!(reward_log_files, joinpath(metrics_path, file))
+                    end
+                end
+                if length(reward_log_files) > 1
+                    println("      ⚠️ Found multiple reward logs in $(metrics_path), using first one")
+                end
+                reward_log = isempty(reward_log_files) ? Dict{Symbol, Vector{Float64}}(
+                    :team_step_reward => Float64[],
+                    :cumulative_discounted_team => Float64[]
+                ) : extract_reward_log(reward_log_files[1])
                 
-                # Process each metric file
+                # Process each metric file (.txt performance summary)
                 for metric_file in metric_files
                     filename = basename(metric_file)
                     println("        Processing: $(filename)")
@@ -400,12 +536,36 @@ function collect_results_data()
                     all_data[target_run][mode][unique_run_id] = Dict(
                         :metrics => metrics,
                         :uncertainty_evolution => uncertainty_evolution,
+                        :reward_log => reward_log,
                         :filepath => metric_file,
                         :source_run_dir => run_dir_name,
                         :source_timestamp => target_run
                     )
                     
                     println("          ✓ Stored as run ID: $(unique_run_id)")
+                end
+
+                # If there are reward logs but no .txt metrics file, still record reward for plotting
+                if isempty(metric_files) && !isempty(reward_log_files) &&
+                   any(!isempty, values(reward_log))
+                    if !haskey(all_data, target_run)
+                        all_data[target_run] = Dict{Symbol, Dict}()
+                    end
+                    if !haskey(all_data[target_run], mode)
+                        all_data[target_run][mode] = Dict{String, Dict}()
+                    end
+                    unique_run_id = "$(target_run)_$(run_dir_name)_$(global_run_counter)"
+                    global_run_counter += 1
+                    empty_metrics = Dict{Symbol, Float64}()
+                    all_data[target_run][mode][unique_run_id] = Dict(
+                        :metrics => empty_metrics,
+                        :uncertainty_evolution => Float64[],
+                        :reward_log => reward_log,
+                        :filepath => reward_log_files[1],
+                        :source_run_dir => run_dir_name,
+                        :source_timestamp => target_run
+                    )
+                    println("      Mode $(mode): no .txt metrics; stored reward-only entry as $(unique_run_id)")
                 end
             end
         end
@@ -435,7 +595,9 @@ end
 # =============================================================================
 
 """
-Calculate averages across runs for each planning mode
+Calculate averages across runs for each planning mode.
+Accumulates all values from all TARGET_RUNS (timestamps), then computes mean per metric,
+so bar plots use the same combined data as the boxplots.
 """
 function calculate_run_averages(all_data::Dict{String, Dict})
     println("📊 Calculating averages across runs...")
@@ -443,15 +605,19 @@ function calculate_run_averages(all_data::Dict{String, Dict})
     averages = Dict{Symbol, Dict{Symbol, Float64}}()
     
     for mode in PLANNING_MODES
-        mode_averages = Dict{Symbol, Float64}()
+        # Accumulate values from timestamps/runs for this mode
+        metric_values = Dict{Symbol, Vector{Float64}}()
         
         for (timestamp, timestamp_data) in all_data
             if haskey(timestamp_data, mode)
-                # Collect all values for each metric
-                metric_values = Dict{Symbol, Vector{Float64}}()
-                
                 for (run_num, run_data) in timestamp_data[mode]
                     for metric in METRICS
+                        # Optional exception: for planning time, only use last TARGET_RUNS folder
+                        if metric == :average_planning_time && USE_LAST_RUN_FOR_PLANNING_TIME
+                            if timestamp != TARGET_RUNS[end]
+                                continue
+                            end
+                        end
                         if haskey(run_data[:metrics], metric)
                             if !haskey(metric_values, metric)
                                 metric_values[metric] = Float64[]
@@ -460,20 +626,145 @@ function calculate_run_averages(all_data::Dict{String, Dict})
                         end
                     end
                 end
-                
-                # Calculate averages
-                for metric in METRICS
-                    if haskey(metric_values, metric) && !isempty(metric_values[metric])
-                        mode_averages[metric] = mean(metric_values[metric])
-                    end
-                end
             end
         end
         
+        # Single mean per metric over all accumulated values
+        mode_averages = Dict{Symbol, Float64}()
+        for metric in METRICS
+            if haskey(metric_values, metric) && !isempty(metric_values[metric])
+                mode_averages[metric] = mean(metric_values[metric])
+            end
+        end
         averages[mode] = mode_averages
     end
     
     return averages
+end
+
+"""
+Compute mean and std trajectories for a list of variable-length vectors.
+Pads shorter vectors with NaN and ignores NaN in stats.
+"""
+function aggregate_variable_length_series(series_list::Vector{Vector{Float64}})
+    if isempty(series_list)
+        return Float64[], Float64[]
+    end
+
+    max_len = maximum(length.(series_list))
+    padded = [vcat(s, fill(NaN, max_len - length(s))) for s in series_list]
+    mat = hcat(padded...)
+
+    means = Float64[]
+    stds = Float64[]
+    for i in 1:max_len
+        vals = mat[i, :]
+        clean_vals = vals[.!isnan.(vals)]
+        if isempty(clean_vals)
+            push!(means, NaN)
+            push!(stds, NaN)
+        else
+            push!(means, mean(clean_vals))
+            push!(stds, length(clean_vals) > 1 ? std(clean_vals) : 0.0)
+        end
+    end
+
+    return means, stds
+end
+
+"""
+Create reward comparison plots from action_reward_log CSV files.
+Saves in a separate output subdirectory to avoid affecting existing plots.
+"""
+function create_reward_comparison_plots(all_data::Dict{String, Dict}, output_dir::String)
+    println("💰 Creating reward comparison plots...")
+
+    reward_output_dir = joinpath(output_dir, "reward_plots")
+    mkpath(reward_output_dir)
+
+    mode_step_series = Dict{Symbol, Vector{Vector{Float64}}}()
+    mode_cum_series = Dict{Symbol, Vector{Vector{Float64}}}()
+
+    for mode in PLANNING_MODES
+        mode_step_series[mode] = Vector{Vector{Float64}}()
+        mode_cum_series[mode] = Vector{Vector{Float64}}()
+
+        for (_, timestamp_data) in all_data
+            if haskey(timestamp_data, mode)
+                for (_, run_data) in timestamp_data[mode]
+                    if haskey(run_data, :reward_log)
+                        rlog = run_data[:reward_log]
+                        if haskey(rlog, :team_step_reward) && !isempty(rlog[:team_step_reward])
+                            push!(mode_step_series[mode], rlog[:team_step_reward])
+                        end
+                        if haskey(rlog, :cumulative_discounted_team) && !isempty(rlog[:cumulative_discounted_team])
+                            push!(mode_cum_series[mode], rlog[:cumulative_discounted_team])
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    has_any_reward_data = any(!isempty(v) for v in values(mode_step_series))
+    if !has_any_reward_data
+        println("    ⚠️ No reward logs found. Skipping reward plots.")
+        return nothing
+    end
+
+    p_step = plot()
+    p_cum = plot()
+
+    for mode in PLANNING_MODES
+        if !isempty(mode_step_series[mode])
+            means, stds = aggregate_variable_length_series(mode_step_series[mode])
+            t = 0:(length(means)-1)
+            plot!(p_step, t, means,
+                ribbon=stds,
+                label=get_mode_display_name(mode),
+                linewidth=2.5,
+                fillalpha=0.2)
+        end
+
+        if !isempty(mode_cum_series[mode])
+            means, stds = aggregate_variable_length_series(mode_cum_series[mode])
+            t = 0:(length(means)-1)
+            plot!(p_cum, t, means,
+                ribbon=stds,
+                label=get_mode_display_name(mode),
+                linewidth=2.5,
+                fillalpha=0.2)
+        end
+    end
+
+    plot!(p_step,
+        title="Team Step Reward Evolution",
+        xlabel="Timestep",
+        ylabel="Team Step Reward",
+        legend=true,
+        grid=true,
+        gridwidth=0.5,
+        gridalpha=0.3)
+
+    plot!(p_cum,
+        title="Cumulative Discounted Team Reward",
+        xlabel="Timestep",
+        ylabel="Discounted Return",
+        legend=true,
+        grid=true,
+        gridwidth=0.5,
+        gridalpha=0.3)
+
+    combined = plot(p_step, p_cum,
+        layout=(2, 1),
+        size=(1300, 1200),
+        margin=6Plots.mm,
+        link=:none)
+
+    combined_filename = joinpath(reward_output_dir, "reward_comparison_combined.pdf")
+    savefig_both(combined, combined_filename)
+
+    return combined
 end
 
 """
@@ -489,11 +780,18 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
         # Collect data for each planning mode
         mode_data = Dict{Symbol, Vector{Float64}}()
         
+        # For planning time, optionally restrict to last TARGET_RUNS folder only
+        use_last_run_only = (metric == :average_planning_time && USE_LAST_RUN_FOR_PLANNING_TIME)
+        last_run_id = TARGET_RUNS[end]
+        
         for mode in PLANNING_MODES
             mode_data[mode] = Float64[]
             
             # Navigate the new data structure: all_data[timestamp][mode][unique_run_id][:metrics][metric]
             for (timestamp, timestamp_data) in all_data
+                if use_last_run_only && timestamp != last_run_id
+                    continue
+                end
                 if haskey(timestamp_data, mode)
                     for (unique_run_id, run_data) in timestamp_data[mode]
                         if haskey(run_data, :metrics) && haskey(run_data[:metrics], metric)
@@ -538,25 +836,26 @@ function create_metric_boxplots(all_data::Dict{String, Dict}, output_dir::String
             xlabel="",
             ylabel=metric_title,
             xticks=(1:length(PLANNING_MODES), [get_mode_display_name(m) for m in PLANNING_MODES]),
+            # Keep angled labels but give them extra padding so they
+            # don’t collide with neighboring boxes.
             xrotation=45,
             legend=false,
             grid=true,
             gridwidth=0.5,
             gridalpha=0.3,
-            size=(900, 900),
+            size=(1000, 900),
             titlefontsize=36,
             xlabelfontsize=32,
             ylabelfontsize=32,
-            xtickfontsize=30,
+            xtickfontsize=26,
             ytickfontsize=30,
-            bottom_margin=15Plots.mm,
+            bottom_margin=22Plots.mm,
             left_margin=18Plots.mm,
             top_margin=15Plots.mm)
         
         # Save plot (PDF and PNG)
         plot_filename = joinpath(output_dir, "boxplot_$(metric).pdf")
         savefig_both(p, plot_filename)
-        println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
         
         # Print statistics
         println("    📈 Statistics for $(metric):")
@@ -646,7 +945,6 @@ function create_uncertainty_evolution_plots(all_data::Dict{String, Dict}, output
             # Save plot (PDF and PNG)
             plot_filename = joinpath(output_dir, "uncertainty_evolution_$(timestamp).pdf")
             savefig_both(p, plot_filename)
-            println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
         end
     end
 end
@@ -717,7 +1015,6 @@ function create_average_uncertainty_comparison(all_data::Dict{String, Dict}, out
     # Save plot (PDF and PNG)
     plot_filename = joinpath(output_dir, "average_uncertainty_comparison.pdf")
     savefig_both(p, plot_filename)
-    println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
     
     return p
 end
@@ -823,6 +1120,9 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
         end
         
         if !isempty(values)
+            # Track maximum value for y-axis padding and annotations
+            max_val = maximum(values)
+
             # Create descriptive metric title
             metric_title = if metric == :event_observation_percentage
                 "Event Observation %"
@@ -838,33 +1138,54 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
                 replace(string(metric), "_" => " ") |> titlecase
             end
             
-            # Create bar plot with better formatting
+            # Choose number formatting:
+            # - 3 decimals for NDD and final uncertainty
+            # - 2 decimals for planning time
+            # - 1 decimal for everything else
+            label_values =
+                if metric in (:ndd_expected, :ndd_actual, :final_uncertainty)
+                    round.(values, digits=3)
+                elseif metric == :average_planning_time
+                    round.(values, digits=2)
+                else
+                    round.(values, digits=1)
+                end
+            label_strings = string.(label_values)
+
+            # Create bar plot with better formatting, clearer spacing, and extra headroom
+            # on the y-axis so value labels don't overlap the title.
             p = bar(mode_labels, values,
                 title=metric_title,
                 ylabel=metric_title,
                 color=:steelblue,
                 alpha=0.7,
+                # Narrower bars to create more separation
+                bar_width=0.45,
+                # Extra headroom above the tallest bar
+                ylims=(0, max_val * 1.3),
                 legend=false,
                 grid=true,
                 gridwidth=0.5,
                 gridalpha=0.3,
                 size=(700, 780),
-                titlefontsize=32,
-                xlabelfontsize=28,
-                ylabelfontsize=28,
-                xtickfontsize=26,
-                ytickfontsize=26,
+                titlefontsize=30,
+                xlabelfontsize=26,
+                ylabelfontsize=26,
+                xtickfontsize=24,
+                ytickfontsize=24,
                 xrotation=45,
                 bottom_margin=15Plots.mm,
                 left_margin=18Plots.mm,
                 top_margin=15Plots.mm)
-            
-            # Add value labels on bars with better positioning
-            for (j, val) in enumerate(values)
-                # Position text above the bar with more offset to avoid overlap
-                y_pos = val + 0.05 * maximum(values)
-                # Use smaller font size and better positioning
-                annotate!(p, j, y_pos, text(round(val, digits=3), 28, :center, :black))
+
+            # Add centered value labels on bars with a vertical offset to avoid overlap
+            for (j, label) in enumerate(label_strings)
+                # Slight left shift to visually center text over the bar
+                x_pos = j - 0.20
+                # Position text above the bar with some offset relative to max value
+                y_pos = values[j] + 0.08 * max_val
+                # Explicitly set horizontal and vertical alignment; color as last arg
+                annotate!(p, x_pos, y_pos, text(label, 24, :center, :bottom, :black))
             end
             
             push!(plots, p)
@@ -877,31 +1198,31 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
         return nothing
     end
     
-    # Combine plots with better layout
+    # Combine plots with better layout and even more space between subplots
     if length(plots) == 4
         combined_plot = plot(plots[1], plots[2], plots[3], plots[4],
             layout=(2,2),
             size=(2000, 1800),
-            margin=0Plots.mm,
+            margin=5Plots.mm,
             link=:none,
-            wspace=-0.08,
-            hspace=-0.08)
+            wspace=0.3,
+            hspace=0.3)
     elseif length(plots) == 3
         combined_plot = plot(plots[1], plots[2], plots[3],
             layout=(1,3),
             size=(2000, 1000),
-            margin=0Plots.mm,
+            margin=5Plots.mm,
             link=:none,
-            wspace=-0.08,
-            hspace=-0.08)
+            wspace=0.18,
+            hspace=0.22)
     elseif length(plots) == 2
         combined_plot = plot(plots[1], plots[2],
             layout=(1,2),
             size=(1600, 1000),
-            margin=0Plots.mm,
+            margin=5Plots.mm,
             link=:none,
-            wspace=-0.08,
-            hspace=-0.08)
+            wspace=0.18,
+            hspace=0.22)
     else
         combined_plot = plot(plots[1],
             size=(800, 1000),
@@ -911,7 +1232,6 @@ function create_averages_bar_plot(averages::Dict{Symbol, Dict{Symbol, Float64}},
     # Save plot (PDF and PNG)
     plot_filename = joinpath(output_dir, "averages_bar_plot.pdf")
     savefig_both(combined_plot, plot_filename)
-    println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
     
     return combined_plot
 end
@@ -928,11 +1248,18 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
     for metric in METRICS
         metric_data[metric] = Dict{Symbol, Vector{Float64}}()
         
+        # For planning time, optionally restrict to last TARGET_RUNS folder only
+        use_last_run_only = (metric == :average_planning_time && USE_LAST_RUN_FOR_PLANNING_TIME)
+        last_run_id = TARGET_RUNS[end]
+        
         for mode in PLANNING_MODES
             values = Float64[]
             
             # Navigate the new data structure: all_data[timestamp][mode][unique_run_id][:metrics][metric]
             for (timestamp, timestamp_data) in all_data
+                if use_last_run_only && timestamp != last_run_id
+                    continue
+                end
                 if haskey(timestamp_data, mode)
                     for (unique_run_id, run_data) in timestamp_data[mode]
                         if haskey(run_data, :metrics) && haskey(run_data[:metrics], metric)
@@ -984,6 +1311,8 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
             xlabel="",
             ylabel=metric_title,
             xticks=(1:length(PLANNING_MODES), [get_mode_display_name(m) for m in PLANNING_MODES]),
+            # Angled labels, but with more space between subplots so
+            # rows don’t overlap each other.
             xrotation=45,
             legend=false,
             grid=true,
@@ -992,9 +1321,9 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
             titlefontsize=32,
             xlabelfontsize=30,
             ylabelfontsize=30,
-            xtickfontsize=28,
+            xtickfontsize=24,
             ytickfontsize=28,
-            bottom_margin=15Plots.mm,
+            bottom_margin=22Plots.mm,
             left_margin=18Plots.mm,
             top_margin=15Plots.mm)
     end
@@ -1029,15 +1358,16 @@ function create_combined_comparison(all_data::Dict{String, Dict}, output_dir::St
     combined_plot = plot(plots..., 
         layout=layout, 
         size=plot_size,
-        margin=0Plots.mm,
+        # Add positive spacing and a small margin so the subplots have
+        # clear separation and the x‑tick labels don’t overlap across rows.
+        margin=5Plots.mm,
         link=:none,
-        wspace=-0.08,
-        hspace=-0.08)
+        wspace=0.28,
+        hspace=0.32)
     
     # Save plot (PDF and PNG)
     plot_filename = joinpath(output_dir, "combined_comparison.pdf")
     savefig_both(combined_plot, plot_filename)
-    println("    ✓ Saved: $(basename(plot_filename)) and $(replace(basename(plot_filename), ".pdf" => ".png"))")
     
     return combined_plot
 end
@@ -1108,6 +1438,9 @@ function main()
     
     # Create combined comparison
     create_combined_comparison(all_data, output_dir)
+
+    # Create reward comparison plots (saved separately)
+    create_reward_comparison_plots(all_data, output_dir)
     
     # Create summary table
     df = create_summary_table(all_data, output_dir)
@@ -1143,6 +1476,7 @@ function main()
     println("  - Uncertainty evolution: $(length(all_data)) timestamp plots")
     println("  - Average uncertainty comparison: 1 combined plot")
     println("  - Combined comparison: 1 overview plot")
+    println("  - Reward comparison: separate combined plot in reward_plots/")
     println("  - Summary statistics: CSV table")
     println("  - Run averages: Text file with averages")
     

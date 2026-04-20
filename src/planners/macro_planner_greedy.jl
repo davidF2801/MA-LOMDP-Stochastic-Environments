@@ -64,24 +64,56 @@ function generate_simple_greedy_sequence(agent, env, C::Int, belief::Belief, gs_
         # Get available cells based on sensor pattern
         available_cells = get_field_of_regard_at_position(agent, agent_pos, env)
         
-        # Find the best cell greedily
+        # Two-cell-only mode: only consider contiguous pairs (no single-cell) when CONTIGUOUS_PAIRS_ONLY and max_sensing_targets >= 2
+        two_cell_only = env.max_sensing_targets >= 2 && Types.CONTIGUOUS_PAIRS_ONLY[]
         best_cell = nothing
+        best_pair = nothing
         best_value = -Inf
         
-        for cell in available_cells
-            # Simple greedy value: entropy * event probability
-            entropy = calculate_cell_entropy(current_belief, cell)
-            event_prob = get_event_probability(current_belief, cell)
-            greedy_value = entropy * event_prob
-            
-            if greedy_value > best_value
-                best_value = greedy_value
-                best_cell = cell
+        if two_cell_only && length(available_cells) > 1
+            for pair in Types.contiguous_pairs(available_cells)
+                pair_value = 0.0
+                for c in pair
+                    pair_value += calculate_cell_entropy(current_belief, c) * get_event_probability(current_belief, c)
+                end
+                if pair_value > best_value
+                    best_value = pair_value
+                    best_pair = pair
+                end
+            end
+        else
+            for cell in available_cells
+                entropy = calculate_cell_entropy(current_belief, cell)
+                event_prob = get_event_probability(current_belief, cell)
+                greedy_value = entropy * event_prob
+                if greedy_value > best_value
+                    best_value = greedy_value
+                    best_cell = cell
+                end
+            end
+            if env.max_sensing_targets >= 2 && Types.CONTIGUOUS_PAIRS_ONLY[]
+                for pair in Types.contiguous_pairs(available_cells)
+                    pair_value = 0.0
+                    for c in pair
+                        pair_value += calculate_cell_entropy(current_belief, c) * get_event_probability(current_belief, c)
+                    end
+                    if pair_value > best_value
+                        best_value = pair_value
+                        best_cell = nothing
+                        best_pair = pair
+                    end
+                end
             end
         end
         
-        # Create action for the best cell (or wait if none found)
-        if best_cell !== nothing && best_value > 0.0
+        # Create action for the best cell/pair (or wait if none found)
+        if best_pair !== nothing && best_value > 0.0
+            action = SensingAction(agent.id, collect(best_pair), false)
+            push!(greedy_sequence, action)
+            for c in best_pair
+                current_belief = collapse_belief_to(current_belief, c, EVENT_PRESENT)
+            end
+        elseif best_cell !== nothing && best_value > 0.0
             action = SensingAction(agent.id, [best_cell], false)
             push!(greedy_sequence, action)
             

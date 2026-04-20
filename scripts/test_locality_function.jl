@@ -211,7 +211,7 @@ function visualize_locality()
         
         # Save animation
         animation_filename = joinpath(output_dir, "agent$(i)_for_fov_animation.gif")
-        gif(anim, animation_filename, fps=1)
+        gif(anim, animation_filename, fps=2)  # 2x faster animation
         println("✓ Saved animation: $(basename(animation_filename))")
     end
 end

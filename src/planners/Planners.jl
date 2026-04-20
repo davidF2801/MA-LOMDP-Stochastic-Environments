@@ -8,11 +8,13 @@ using ..Environment
 using ..Agents
 
 # Export submodules
-export GroundStation, MacroPlannerAsync, MacroPlannerSync, PolicyTreePlanner, MacroPlannerRandom, MacroPlannerSweep, MacroPlannerGreedy, MacroPlannerPriorBased, MacroPlannerPBVI, MacroPlannerOracle, MacroPlannerMPOMDPOpenLoop, MacroPlannerPOMCP
+export GroundStation, MacroPlannerAsync, MacroPlannerSync, PolicyTreePlanner, MacroPlannerRandom, MacroPlannerSweep, MacroPlannerGreedy, MacroPlannerPriorBased, MacroPlannerPBVI, MacroPlannerPBVIRollout, MacroPlannerOracle, MacroPlannerMPOMDPOpenLoop, MacroPlannerPOMCP
 # MacroPlannerSyncMulti temporarily disabled due to package version conflicts
 
 # Include submodules
 include("ground_station.jl")
+# PBVI rollout lives in ground_station.jl's include tree; re-export for scripts (`using .Planners: MacroPlannerPBVIRollout`).
+const MacroPlannerPBVIRollout = GroundStation.MacroPlannerPBVIRollout
 include("macro_planner_async.jl")
 include("macro_planner_sync.jl")
 include("policy_tree_planner.jl")

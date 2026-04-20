@@ -30,18 +30,28 @@ using Glob
 # =============================================================================
 
 # Default settings (can be overridden by command line arguments)
-DEFAULT_MODE1 = :pbvi_0_5_0_5
+DEFAULT_MODE1 = :klolop
 DEFAULT_MODE2 = :prior_based
 DEFAULT_METRIC = :event_observation_percentage
-DEFAULT_DIRECTION = "best"  # "best" or "worst"
+DEFAULT_DIRECTION = "worst"  # "best" or "worst"
+
+# Base results directory: resolve relative to this script's location so it works
+# regardless of the current working directory when the script is run.
+const RESULTS_BASE = joinpath(@__DIR__, "..", "results")
 
 # Multiple results directories to analyze - add as many as needed
 TARGET_RUNS = [
-    "run_2025-09-08T09-36-38-974",
+    #"run_2025-08-17T14-08-17-424",
     #"run_2025-08-19T10-23-17-927-new",
     # Add more run directories here as needed
     # "run_2025-08-16T16-52-26-473",
     # "run_2025-08-16T16-52-42-231",
+    #"run_2026-02-15T22-34-22-346"
+    #"run_2026-02-04T18-45-16-865"
+    #"run_2026-02-28T23-42-26-769"
+    #"run_2025-09-08T09-36-38-974"
+    #"run_2026-02-28T23-42-26-769",
+    "run_2026-03-01T09-19-46-709"
 ]
 
 # Metric definitions: true means higher is better, false means lower is better
@@ -144,7 +154,7 @@ end
 Find all available run directories in the results folder
 """
 function list_available_runs()
-    results_base = joinpath("..", "results")
+    results_base = RESULTS_BASE
     if !isdir(results_base)
         println("❌ Results directory not found: $(results_base)")
         return String[]
@@ -165,7 +175,7 @@ end
 Find all available planning modes in the results
 """
 function list_available_planning_modes()
-    results_base = joinpath("..", "results")
+    results_base = RESULTS_BASE
     if !isdir(results_base)
         println("❌ Results directory not found: $(results_base)")
         return Symbol[]
@@ -207,7 +217,7 @@ function collect_run_data_for_mode(planning_mode::Symbol)
     
     # Process each target run directory
     for target_run in TARGET_RUNS
-        results_dir = joinpath("..", "results", target_run)
+        results_dir = joinpath(RESULTS_BASE, target_run)
         
         # Check if target directory exists
         if !isdir(results_dir)

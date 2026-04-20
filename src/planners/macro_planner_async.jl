@@ -29,7 +29,68 @@ import ..Agents.BeliefManagement.predict_belief_evolution_dbn, ..Agents.BeliefMa
 # Remove circular imports - these functions will be available through the environment
 import ..GroundStation: initialize_global_belief
 
-export best_script, calculate_macro_script_reward
+export best_script, calculate_macro_script_reward, generate_action_sequences, get_actions_per_timestep,
+       generate_sequences_from_actions_per_timestep
+
+"""
+    get_actions_per_timestep(agent, env, C, gs_state, phase_offset=0)
+
+Return `actions_per_timestep[t]` = vector of feasible `SensingAction`s for absolute step `gs_state.time_step + t - 1`.
+Used by macro-script enumeration and by PBVI-Rollout sequence sampling.
+"""
+function get_actions_per_timestep(agent, env, C::Int, gs_state, phase_offset::Int=0)
+    if C == 0
+        return Vector{Vector{SensingAction}}()
+    end
+    actions_per_timestep = Vector{Vector{SensingAction}}()
+    for t in 1:C
+        global_timestep = gs_state.time_step + t - 1
+        pos = get_position_at_time(agent.trajectory, global_timestep, phase_offset)
+        for_cells = get_field_of_regard_at_position(agent, pos, env)
+
+        timestep_actions = SensingAction[]
+        push!(timestep_actions, SensingAction(agent.id, Tuple{Int, Int}[], false))
+
+        two_cell_only = env.max_sensing_targets >= 2 && Types.CONTIGUOUS_PAIRS_ONLY[]
+        if two_cell_only && length(for_cells) > 1
+            for subset in Types.contiguous_pairs(for_cells)
+                action = SensingAction(agent.id, collect(subset), false)
+                if check_battery_feasible(agent, action, agent.battery_level)
+                    push!(timestep_actions, action)
+                end
+            end
+        else
+            for cell in for_cells
+                action = SensingAction(agent.id, [cell], false)
+                if check_battery_feasible(agent, action, agent.battery_level)
+                    push!(timestep_actions, action)
+                end
+            end
+            if length(for_cells) > 1 && env.max_sensing_targets > 1
+                if Types.CONTIGUOUS_PAIRS_ONLY[]
+                    for subset in Types.contiguous_pairs(for_cells)
+                        action = SensingAction(agent.id, collect(subset), false)
+                        if check_battery_feasible(agent, action, agent.battery_level)
+                            push!(timestep_actions, action)
+                        end
+                    end
+                else
+                    for subset_size in 2:min(env.max_sensing_targets, length(for_cells))
+                        for subset in combinations(for_cells, subset_size)
+                            action = SensingAction(agent.id, collect(subset), false)
+                            if check_battery_feasible(agent, action, agent.battery_level)
+                                push!(timestep_actions, action)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        push!(actions_per_timestep, timestep_actions)
+    end
+    return actions_per_timestep
+end
 
 """
 best_script(env, belief::Belief, agent::Agent, C::Int, other_scripts, gs_state)::Vector{SensingAction}
@@ -97,50 +158,8 @@ function generate_action_sequences(agent, env, C::Int, gs_state, phase_offset::I
     if C == 0
         return Vector{SensingAction}[]
     end
-    
-    # 1. Get available actions for each timestep using ABSOLUTE timesteps
-    # This ensures actions are feasible at the actual execution time
-    actions_per_timestep = Vector{Vector{SensingAction}}()
-    for t in 1:C
-        # Calculate absolute timestep when this action will be executed
-        global_timestep = gs_state.time_step + t - 1
-        # Get agent position at the actual execution time
-        pos = get_position_at_time(agent.trajectory, global_timestep, agent.phase_offset)
-        for_cells = get_field_of_regard_at_position(agent, pos, env)
-        
-        # Generate actions for this timestep
-        timestep_actions = SensingAction[]
-        
-        # Add wait action (always feasible)
-        push!(timestep_actions, SensingAction(agent.id, Tuple{Int, Int}[], false))
-        
-        # Add single-cell sensing actions (check battery)
-        for cell in for_cells
-            action = SensingAction(agent.id, [cell], false)
-            if check_battery_feasible(agent, action, agent.battery_level)
-                push!(timestep_actions, action)
-            end
-        end
-        
-        # Add multi-cell sensing actions (check battery)
-        if length(for_cells) > 1 && env.max_sensing_targets > 1
-            for subset_size in 2:min(env.max_sensing_targets, length(for_cells))
-                for subset in combinations(for_cells, subset_size)
-                    action = SensingAction(agent.id, collect(subset), false)
-                    if check_battery_feasible(agent, action, agent.battery_level)
-                        push!(timestep_actions, action)
-                    end
-                end
-            end
-        end
-        
-        push!(actions_per_timestep, timestep_actions)
-    end
-    
-    # 3. Generate all sequences by selecting one action per timestep
-    sequences = generate_sequences_from_actions_per_timestep(actions_per_timestep)
-    
-    return sequences
+    actions_per_timestep = get_actions_per_timestep(agent, env, C, gs_state, phase_offset)
+    return generate_sequences_from_actions_per_timestep(actions_per_timestep)
 end
 
 """

@@ -138,10 +138,10 @@ function visualize_parameter_maps(param_maps::Types.RSPParameterMaps)
         colorbar_title="δ", 
         subplot=3)
     
-    # Mu map (death probability)
-    heatmap!(fig[4], param_maps.mu_map, 
-        title="μ (Death Probability)", 
-        colorbar_title="μ", 
+    # Beta0 map (spontaneous ignition rate)
+    heatmap!(fig[4], param_maps.beta0_map, 
+        title="β₀ (Spontaneous Ignition Rate)", 
+        colorbar_title="β₀", 
         subplot=4)
     
     return fig
@@ -197,7 +197,7 @@ function create_animation(evolution::Vector{Matrix{EventState}}, param_maps::Typ
         plot(frame)
     end
 
-    gif(anim, "heterogeneous_rsp_simulation.gif", fps=1)
+    gif(anim, "heterogeneous_rsp_simulation.gif", fps=2)  # 2x faster animation
 end
 
 """

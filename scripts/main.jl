@@ -33,12 +33,24 @@ using Infiltrator
 const NUM_STEPS = 100            # Total simulation steps
 const PLANNING_MODE = :policy         # Use policy tree planning (:script, :policy, :random, :sweep, :greedy, :future_actions, :prior_based, :pbvi)
 #const modes = [:pbvi, :script, :macro_approx_095, :macro_approx_090, :macro_approx_085]
-#const modes = [:random, :pomcp, :mpomdp_openloop, :pbvi,:sweep, :oracle, :greedy, :prior_based, :script]
-const modes = [:pbvi_mis]  # Quick test of PBVI+MIS
+const modes = [:pbvi, :pbvi_rollout, :sweep, :oracle, :greedy, :prior_based]
+#const modes = [:joint_abba]  # e.g. :script, :joint_abba, :posts, :klolop, :pomcp
 const N_RUNS = 50
 const MAX_BATTERY = 10000.0
 const CHARGING_RATE = 3.0
 const OBSERVATION_COST = 0.0
+
+# 📈 PBVI / POMCP / MPOMDP HYPERPARAMETERS (SB‑ABBA)
+const PBVI_N_SEED = 30
+const PBVI_N_PARTICLES = 32
+const PBVI_N_SWEEPS = 50
+const POMCP_N_SIMS       = PBVI_N_SEED * PBVI_N_PARTICLES * PBVI_N_SWEEPS*20
+const MPOMDP_N_SEQUENCES = -1  # 4x3 toy: keep full enumeration
+# PBVI-Rollout (`:pbvi_rollout`): `-1` = enumerate all candidate macro-sequences; `>0` = sample that many distinct sequences
+const PBVI_ROLLOUT_N_SEQUENCES = 10000
+const KLOLOP_BUDGET      = PBVI_N_SEED * PBVI_N_PARTICLES * PBVI_N_SWEEPS  # open-loop MC rollouts per agent (individual baseline)
+const POSTS_BUDGET       = PBVI_N_SEED * PBVI_N_PARTICLES * PBVI_N_SWEEPS  # POSTS simulations (match KL-OLOP scale for fair comparison)
+
 # Planning modes:
 #   :script - Exact belief evolution with macro-script planning
 #   :policy - Policy tree planning
@@ -53,6 +65,9 @@ const OBSERVATION_COST = 0.0
 #   :prior_based - Prior-based planning using static probability map (no belief updates)
 #   :pbvi - Point-Based Value Iteration planning
 #   :pbvi_mis - PBVI with Multiple Importance Sampling trajectory reuse (faster PBVI)
+#   :klolop - KL-OLOP open-loop optimistic planning (individual, no coordination; same reward as ABBA)
+#   :posts  - POSTS open-loop planning for POMDPs (Phan et al., AAAI-19; Thompson Sampling stack)
+#   :joint_abba - Joint ABBA: joint residual search over non-empty sensing only (macro_planner_async_joint.jl)
 
 # 🌍 ENVIRONMENT PARAMETERS
 const GRID_WIDTH = 3                  # Grid width (columns)
@@ -113,9 +128,18 @@ using .MyProject: EventDynamics, SpatialGrid
 using .MyProject.Agents.TrajectoryPlanner: get_position_at_time, execute_plan
 using .MyProject.Types: save_agent_actions_to_csv, calculate_and_save_ndd_metrics, EnhancedEventTracker, initialize_enhanced_event_tracker, update_enhanced_event_tracking!, mark_observed_events_with_time!, get_event_statistics, save_event_tracking_data, save_uncertainty_evolution_data, save_sync_event_data, create_observation_heatmap
 
-# Sync reward configuration with PBVI planner
-using .MyProject.Planners.GroundStation.MacroPlannerPBVI: set_reward_config_from_main
+# Sync reward configuration and hyperparameters with PBVI planner
+using .MyProject.Planners.GroundStation.MacroPlannerPBVI: set_reward_config_from_main, set_hyperparams_from_main
 set_reward_config_from_main(ENTROPY_WEIGHT, VALUE_WEIGHT, INFORMATION_STATES, STATE_VALUES)
+set_hyperparams_from_main(PBVI_N_SEED, PBVI_N_PARTICLES, PBVI_N_SWEEPS)
+
+# Configure POMCP and MPOMDP budgets from main
+using .MyProject.Planners.GroundStation: set_pomcp_n_sims_from_main, set_mpomdp_n_sequences_from_main, set_pbvi_rollout_n_sequences_from_main, set_klolop_budget_from_main, set_posts_budget_from_main
+set_pomcp_n_sims_from_main(POMCP_N_SIMS)
+set_mpomdp_n_sequences_from_main(MPOMDP_N_SEQUENCES)
+set_pbvi_rollout_n_sequences_from_main(PBVI_ROLLOUT_N_SEQUENCES)
+set_klolop_budget_from_main(KLOLOP_BUDGET)
+set_posts_budget_from_main(POSTS_BUDGET)
 
 # Sync reward configuration with PBVI+MIS planner
 using .MyProject.Planners.GroundStation.MacroPlannerPBVIMIS: set_reward_config_from_main as set_reward_config_pbvi_mis
@@ -134,9 +158,10 @@ using .Planners.MacroPlannerAsync
 using .Planners.PolicyTreePlanner
 using .Planners.MacroPlannerRandom # Added for random planner
 using .Planners.MacroPlannerSweep # Added for sweep planner
+using .Planners.MacroPlannerPBVI: calculate_sophisticated_reward
 
 # Import RSP functions
-import .Environment.EventDynamicsModule: transition_rsp!
+import .Environment.EventDynamicsModule: transition_rsp!, rsp_transition_probabilities
 # Import functions from MacroPlannerAsync
 import .MacroPlannerAsync: initialize_uniform_belief, get_known_observations_at_time, has_known_observation, get_known_observation, evolve_no_obs, collapse_belief_to
 
@@ -154,6 +179,9 @@ mutable struct ReplayEnvironment
     env::SpatialGrid
     event_evolution::Vector{Matrix{EventState}}
     rng_state::Vector{Int}  # Store RNG state for reproducibility
+    """Per-step RSP kernels: index k matches transition event_evolution[k] → event_evolution[k+1] (timestep_from = k-1)."""
+    prob_no_event_evolution::Vector{Matrix{Float64}}
+    prob_event_evolution::Vector{Matrix{Float64}}
 end
 
 """
@@ -949,6 +977,11 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     # Track events detected per timestep for animation labels
     events_detected_per_timestep = Int[]
 
+    # Paper-style reward log (prior belief before sensing at t; same formula for all planners)
+    reward_log_rows = Dict{Symbol, Any}[]
+    cumulative_discounted_team = 0.0
+    γ_reward = env.discount
+
     # Get initial environment state from replay
     current_environment = get_replay_state(replay_env, 0)
     
@@ -978,15 +1011,21 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
             end
         end
         
+        # Prior belief before any sensing at this timestep (matches reward definition in PBVI / paper)
+        B_prior = gs_state.global_belief !== nothing ? deepcopy(gs_state.global_belief) : MacroPlannerAsync.initialize_uniform_belief(env)
+
         # Execute agent actions
         joint_actions = SensingAction[]
         agent_observations = Vector{Tuple{Int, Vector{Tuple{Tuple{Int,Int}, EventState}}}}()
+        step_agent_rewards = Tuple{Int, Float64}[]
         
         for agent in agents
             # Get plan from ground station and execute it
             plan, plan_type = GroundStation.get_agent_plan(agent, gs_state)
             action = execute_plan(agent, plan, plan_type, agent.observation_history, t)
             push!(joint_actions, action)
+            r_action = isempty(action.target_cells) ? 0.0 : sum(calculate_sophisticated_reward(B_prior, cell, ENTROPY_WEIGHT, VALUE_WEIGHT, STATE_VALUES) for cell in action.target_cells)
+            push!(step_agent_rewards, (agent.id, r_action))
             
             # Ensure every agent charges every timestep (this is the key fix!)
             # The charging rate is applied every timestep regardless of action execution
@@ -1021,6 +1060,18 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
                 push!(agent.observation_history, empty_observation)
                 println("  Agent $(agent.id): wait action")
             end
+        end
+
+        team_step_reward = sum(r for (_, r) in step_agent_rewards)
+        cumulative_discounted_team += γ_reward^t * team_step_reward
+        for (aid, r_a) in step_agent_rewards
+            push!(reward_log_rows, Dict(
+                :timestep => t,
+                :agent_id => aid,
+                :action_reward => r_a,
+                :team_step_reward => team_step_reward,
+                :cumulative_discounted_team => cumulative_discounted_team
+            ))
         end
         
         # Mark events as observed with detection time tracking
@@ -1138,7 +1189,7 @@ function simulate_rsp_async_planning_replay(replay_env::ReplayEnvironment, num_s
     println("  Planning horizon: $(PLANNING_HORIZON)")
     println("  Dynamics: RSP (Replay)")
     
-    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history, event_tracker, uncertainty_evolution, average_uncertainty_per_timestep, ndd_expected_lifetime, ndd_actual_lifetime, belief_event_present_evolution, events_detected_per_timestep
+    return gs_state, agents, event_observation_percentage, sync_events, environment_evolution, action_history, event_tracker, uncertainty_evolution, average_uncertainty_per_timestep, ndd_expected_lifetime, ndd_actual_lifetime, belief_event_present_evolution, events_detected_per_timestep, reward_log_rows, cumulative_discounted_team
 end
 
 # =============================================================================
@@ -1171,12 +1222,17 @@ function simulate_environment_once(num_steps::Int)
     
     # Track evolution
     event_evolution = [copy(current_state)]
+    prob_no_event_evolution = Matrix{Float64}[]
+    prob_event_evolution = Matrix{Float64}[]
     
     println("Initial state:")
     display(current_state)
     
     # Simulate evolution
     for step in 1:num_steps
+        pno, pe = rsp_transition_probabilities(current_state, env.rsp_params)
+        push!(prob_no_event_evolution, pno)
+        push!(prob_event_evolution, pe)
         new_state = similar(current_state)
         
         # Use heterogeneous RSP transition with parameter maps
@@ -1194,7 +1250,7 @@ function simulate_environment_once(num_steps::Int)
     println("  Total steps: $(length(event_evolution))")
     println("  Final events: $(count(==(EVENT_PRESENT), event_evolution[end]))")
     
-    return ReplayEnvironment(env, event_evolution, initial_rng_state)
+    return ReplayEnvironment(env, event_evolution, initial_rng_state, prob_no_event_evolution, prob_event_evolution)
 end
 
 """
@@ -1275,7 +1331,7 @@ for n in 1:N_RUNS
         println("  Grid: $(GRID_WIDTH)x$(GRID_HEIGHT)")
         println("  Agents: $(NUM_AGENTS) (rows 1 and 3)")
         println("  Planning horizon: $(PLANNING_HORIZON)")
-        println("  Planning mode: $(actual_planning_mode) (:script, :policy, :random, :sweep, :greedy, :future_actions, :macro_approx, :pbvi)")
+        println("  Planning mode: $(actual_planning_mode) (:script, :policy, :random, :sweep, :greedy, :future_actions, :macro_approx, :pbvi, :pbvi_rollout)")
         if actual_planning_mode == :macro_approx
             println("  Max probability mass: $(max_prob_mass) (branch pruning threshold)")
         end
@@ -1302,7 +1358,7 @@ for n in 1:N_RUNS
         end
 
         # Run the simulation with replay
-        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, avg_uncertainty, ndd_expected_lifetime, ndd_actual_lifetime, belief_event_present_evolution, events_detected_per_timestep = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, actual_planning_mode)
+        gs_state, agents, percentage, sync_events, env_evolution, action_history, event_tracker, uncertainty_evolution, avg_uncertainty, ndd_expected_lifetime, ndd_actual_lifetime, belief_event_present_evolution, events_detected_per_timestep, reward_log_rows, cumulative_discounted_team = simulate_rsp_async_planning_replay(replay_env, NUM_STEPS, n, actual_planning_mode)
 
         println("\n✅ RSP test completed!")
         println("📊 Final event observation percentage: $(round(percentage, digits=1))%")
@@ -1364,6 +1420,13 @@ for n in 1:N_RUNS
         
         # Save sync event data
         Types.save_sync_event_data(sync_events, results_base_dir, n, mode)
+
+        # Ground truth dynamics + RSP kernels for offline reconstruction
+        Types.save_event_evolution_replay_csv(replay_env.event_evolution, results_base_dir, n, mode)
+        Types.save_rsp_transition_probabilities_csv(replay_env.prob_no_event_evolution, replay_env.prob_event_evolution, results_base_dir, n, mode)
+        Types.save_planner_environment_evolution_csv(env_evolution, results_base_dir, n, mode)
+        Types.save_action_reward_log_csv(reward_log_rows, results_base_dir, n, mode, replay_env.env.discount, cumulative_discounted_team;
+            w_H=ENTROPY_WEIGHT, w_F=VALUE_WEIGHT, state_values=STATE_VALUES)
         
         # Create and save observation heatmap
         Types.create_observation_heatmap(action_history, GRID_WIDTH, GRID_HEIGHT, results_base_dir, n, mode)

@@ -236,7 +236,9 @@ end
 # =============================================================================
 
 """
-Calculate averages across runs for each planning mode
+Calculate averages across runs for each planning mode.
+Accumulates all values from all runs (and timestamps), then computes one mean per metric,
+so bar plots use the same combined data as the boxplots.
 """
 function calculate_run_averages(all_data::Dict{String, Dict})
     println("📊 Calculating averages across runs...")
@@ -244,13 +246,11 @@ function calculate_run_averages(all_data::Dict{String, Dict})
     averages = Dict{Symbol, Dict{Symbol, Float64}}()
     
     for mode in PLANNING_MODES
-        mode_averages = Dict{Symbol, Float64}()
+        # Accumulate values from ALL timestamps/runs for this mode
+        metric_values = Dict{Symbol, Vector{Float64}}()
         
         for (timestamp, timestamp_data) in all_data
             if haskey(timestamp_data, mode)
-                # Collect all values for each metric
-                metric_values = Dict{Symbol, Vector{Float64}}()
-                
                 for (run_num, run_data) in timestamp_data[mode]
                     for metric in METRICS
                         if haskey(run_data[:metrics], metric)
@@ -261,16 +261,16 @@ function calculate_run_averages(all_data::Dict{String, Dict})
                         end
                     end
                 end
-                
-                # Calculate averages
-                for metric in METRICS
-                    if haskey(metric_values, metric) && !isempty(metric_values[metric])
-                        mode_averages[metric] = mean(metric_values[metric])
-                    end
-                end
             end
         end
         
+        # Single mean per metric over all accumulated values
+        mode_averages = Dict{Symbol, Float64}()
+        for metric in METRICS
+            if haskey(metric_values, metric) && !isempty(metric_values[metric])
+                mode_averages[metric] = mean(metric_values[metric])
+            end
+        end
         averages[mode] = mode_averages
     end
     
